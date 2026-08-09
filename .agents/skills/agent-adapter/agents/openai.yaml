@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Adapter"
+  short_description: "Connect another coding Agent to SolFlash Relay"
+  default_prompt: "Integrate this coding Agent with SolFlash Relay using a scoped adapter manifest and verify project path, model, and session behavior."

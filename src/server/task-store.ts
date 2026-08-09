@@ -1,0 +1,115 @@
+import { EventEmitter } from "node:events";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import path from "node:path";
+
+import type { RelayEvent, RelayTask } from "../shared/types.js";
+
+interface PersistedState {
+  version: 1;
+  tasks: RelayTask[];
+}
+
+export class TaskStore extends EventEmitter {
+  readonly #filePath: string;
+  readonly #tasks = new Map<string, RelayTask>();
+  #persistQueue: Promise<void> = Promise.resolve();
+
+  constructor(dataDir: string) {
+    super();
+    this.#filePath = path.join(dataDir, "tasks.json");
+  }
+
+  async load() {
+    await mkdir(path.dirname(this.#filePath), { recursive: true });
+    try {
+      const raw = await readFile(this.#filePath, "utf8");
+      const state = JSON.parse(raw) as PersistedState;
+      for (const task of state.tasks ?? []) {
+        task.projectName ??= path.basename(task.request.workdir);
+        task.request.plannerAgent ??= "codex";
+        task.request.plannerModel ??= "gpt-5.6-sol";
+        task.request.executorAgent ??= "claude-haha";
+        task.requestedModel ??= task.request.model ?? "deepseek-v4-flash";
+        task.effectiveModel ??= task.usage.model;
+        task.modelWarning ??= null;
+        if (task.status === "running" || task.status === "waiting") {
+          task.status = "failed";
+          task.error = "Relay restarted while this task was active.";
+          task.finishedAt = new Date().toISOString();
+        }
+        this.#tasks.set(task.id, task);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+
+  list() {
+    return [...this.#tasks.values()].sort((a, b) =>
+      b.createdAt.localeCompare(a.createdAt),
+    );
+  }
+
+  get(id: string) {
+    return this.#tasks.get(id) ?? null;
+  }
+
+  async set(task: RelayTask) {
+    task.updatedAt = new Date().toISOString();
+    this.#tasks.set(task.id, task);
+    await this.#persist();
+    this.emit("task", task);
+    return task;
+  }
+
+  async appendEvent(taskId: string, event: RelayEvent) {
+    const task = this.#tasks.get(taskId);
+    if (!task) return null;
+    task.events = [...task.events, event].slice(-500);
+    task.updatedAt = event.timestamp;
+    await this.#persist();
+    this.emit("event", event);
+    this.emit("task", task);
+    return task;
+  }
+
+  waitForUpdate(taskId: string, afterUpdatedAt: string, timeoutMs: number) {
+    const current = this.get(taskId);
+    if (!current) return Promise.resolve(null);
+    if (current.updatedAt !== afterUpdatedAt || isTerminal(current.status)) {
+      return Promise.resolve(current);
+    }
+
+    return new Promise<RelayTask | null>((resolve) => {
+      const onTask = (task: RelayTask) => {
+        if (task.id !== taskId || task.updatedAt === afterUpdatedAt) return;
+        cleanup();
+        resolve(task);
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        resolve(this.get(taskId));
+      }, timeoutMs);
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.off("task", onTask);
+      };
+      this.on("task", onTask);
+    });
+  }
+
+  async #persist() {
+    this.#persistQueue = this.#persistQueue
+      .catch(() => undefined)
+      .then(async () => {
+        const state: PersistedState = { version: 1, tasks: this.list() };
+        const temporary = `${this.#filePath}.tmp`;
+        await writeFile(temporary, JSON.stringify(state, null, 2), "utf8");
+        await rename(temporary, this.#filePath);
+      });
+    await this.#persistQueue;
+  }
+}
+
+export const isTerminal = (status: RelayTask["status"]) =>
+  status === "completed" || status === "failed" || status === "cancelled";

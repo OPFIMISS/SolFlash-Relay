@@ -1,0 +1,7 @@
+[mcp_servers.sol_flash_relay]
+command = "node"
+args = ["C:\\absolute\\path\\to\\SolFlashRelay\\dist\\server\\mcp.js"]
+cwd = "C:\\absolute\\path\\to\\SolFlashRelay"
+enabled = true
+startup_timeout_sec = 15
+tool_timeout_sec = 900

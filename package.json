@@ -1,0 +1,95 @@
+{
+  "name": "sol-flash-relay",
+  "version": "0.3.0",
+  "private": true,
+  "description": "A local MCP control plane that lets Codex Sol delegate bounded work to Claude Code Haha Flash without moving API credentials or conversations.",
+  "author": "SolFlash Relay",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/desktop/main.js",
+  "scripts": {
+    "dev": "concurrently -k -n relay,ui -c cyan,green \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "tsx watch src/server/daemon.ts",
+    "dev:client": "vite",
+    "build": "npm run build:client && npm run build:server",
+    "build:client": "vite build",
+    "build:server": "tsc -p tsconfig.server.json && node scripts/copy-desktop-assets.cjs",
+    "start": "node dist/server/daemon.js",
+    "desktop": "electron .",
+    "package:unpacked": "electron-builder --win dir --config.electronDist=node_modules/electron/dist",
+    "package:portable": "node scripts/package-target.cjs portable",
+    "package:installer": "node scripts/package-target.cjs nsis",
+    "package:win": "npm run build && npm run package:unpacked && npm run package:portable && npm run package:installer",
+    "mcp": "node dist/server/mcp.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "test:server": "tsx src/server/self-test.ts",
+    "test:agents": "tsx src/server/agent-runner-test.ts",
+    "test:mcp": "tsx src/server/mcp-test.ts",
+    "test:mcp:packaged": "node scripts/packaged-mcp-test.cjs",
+    "test:token-monitor": "tsx src/server/token-monitor-test.ts",
+    "test:ui": "node scripts/capture-ui.cjs",
+    "test:desktop": "node scripts/desktop-smoke.cjs",
+    "test:desktop:packaged": "node scripts/packaged-desktop-smoke.cjs",
+    "test:e2e": "tsx src/server/e2e-test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "lucide-react": "^1.30.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "recharts": "^3.10.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "concurrently": "^10.0.4",
+    "electron": "^43.3.0",
+    "electron-builder": "^26.15.3",
+    "playwright": "^1.62.1",
+    "tsx": "^4.23.11",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1"
+  },
+  "build": {
+    "appId": "com.solflash.relay",
+    "productName": "SolFlash Relay",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/client/**/*",
+      "dist/server/**/*.js",
+      "!dist/server/**/*-test.js",
+      "dist/shared/**/*",
+      "dist/desktop/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "portable",
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "SolFlash Relay"
+    }
+  }
+}
