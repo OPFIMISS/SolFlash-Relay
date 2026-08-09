@@ -9,7 +9,7 @@ SolFlash Relay 是一个本地多 Agent 编程控制面：让 Codex / Sol 负责
 
 它不接管 API Key，不转发模型 API，也不把第三个模型塞进链路。每个 Agent 继续使用自己的登录、Provider、模型配置和原生对话记录；Relay 只负责结构化派发、同项目路径绑定、进度监控、结果回传与用量审计。
 
-[下载 Windows EXE / Download](https://github.com/OPFIMISS/SolFlash-Relay-/releases/latest) · [问题反馈 / Issues](https://github.com/OPFIMISS/SolFlash-Relay-/issues)
+[下载 Windows EXE / Download](https://github.com/OPFIMISS/SolFlash-Relay/releases/latest) · [问题反馈 / Issues](https://github.com/OPFIMISS/SolFlash-Relay/issues)
 
 ![SolFlash Relay 项目对话与用量面板](docs/images/dashboard.png)
 
@@ -61,7 +61,7 @@ flowchart LR
 
 ## Windows 安装
 
-推荐从 [Releases](https://github.com/OPFIMISS/SolFlash-Relay-/releases) 下载：
+推荐从 [Releases](https://github.com/OPFIMISS/SolFlash-Relay/releases) 下载：
 
 - `SolFlash-Relay-0.5.0-x64-setup.exe`：推荐版本，支持后台托管和一键安装 Codex MCP。
 - `SolFlash-Relay-0.5.0-x64-portable.exe`：便携控制台与后台宿主；由于便携外壳不能稳定转发 MCP stdio，不提供一键 MCP 安装。
@@ -90,7 +90,7 @@ flowchart LR
 
 ### 1. 安装并启动 Setup 版本
 
-从 [GitHub Releases](https://github.com/OPFIMISS/SolFlash-Relay-/releases/latest) 下载 `SolFlash-Relay-0.5.0-x64-setup.exe`，完成安装后启动 SolFlash Relay。
+从 [GitHub Releases](https://github.com/OPFIMISS/SolFlash-Relay/releases/latest) 下载 `SolFlash-Relay-0.5.0-x64-setup.exe`，完成安装后启动 SolFlash Relay。
 
 看到顶部“Relay 后台托管已开启”说明本地服务已经运行。关闭窗口后它仍会留在 Windows 托盘中。
 
@@ -241,7 +241,7 @@ Relay does not proxy model APIs or own provider credentials. Every Agent keeps i
 
 ### Install
 
-Download the recommended Setup build from [GitHub Releases](https://github.com/OPFIMISS/SolFlash-Relay-/releases):
+Download the recommended Setup build from [GitHub Releases](https://github.com/OPFIMISS/SolFlash-Relay/releases):
 
 - `SolFlash-Relay-0.5.0-x64-setup.exe`: desktop host, tray mode, and one-click Codex MCP installation.
 - `SolFlash-Relay-0.5.0-x64-portable.exe`: portable dashboard and background host; MCP stdio installation requires the Setup build.
