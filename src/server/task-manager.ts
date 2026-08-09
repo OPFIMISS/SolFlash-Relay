@@ -153,7 +153,7 @@ export class TaskManager {
       ? session.model
       : settings.executorModel;
     const normalized = await this.#validateRequest({
-      title: `接管 · ${session.title}`,
+      title: session.title,
       objective: "接管已有 Haha 项目对话，由主策划审查当前实现并继续发送纠偏指令。",
       workdir: session.workdir,
       allowedFiles,
@@ -189,6 +189,7 @@ export class TaskManager {
       events: [],
       messages: [],
       origin: "adopted",
+      sourceSessionTitle: session.title,
     };
 
     await this.store.set(task);

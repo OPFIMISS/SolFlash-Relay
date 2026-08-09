@@ -1,23 +1,25 @@
 import { execFile } from "node:child_process";
-import { open, readdir, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 
 import type { HahaSessionSummary } from "../shared/types.js";
 import type { RelayConfig } from "./config.js";
 
 const execFileAsync = promisify(execFile);
-const HEAD_BYTES = 256 * 1024;
-const TAIL_BYTES = 512 * 1024;
-
 type JsonLine = Record<string, unknown> & {
   type?: string;
   customTitle?: string;
+  aiTitle?: string;
   sessionId?: string;
   cwd?: string;
+  workDir?: string;
   timestamp?: string;
   lastPrompt?: string;
   message?: unknown;
+  repository?: unknown;
 };
 
 export const discoverHahaSessions = async (
@@ -62,37 +64,59 @@ const readSession = async (
   updatedAt: Date,
   changedFiles: string[],
 ): Promise<HahaSessionSummary | null> => {
-  const info = await stat(filePath);
-  const head = await readSlice(filePath, 0, Math.min(info.size, HEAD_BYTES));
-  const tailOffset = Math.max(0, info.size - TAIL_BYTES);
-  const tail = tailOffset > 0 ? await readSlice(filePath, tailOffset, TAIL_BYTES) : "";
-  const lines = [...parseLines(head), ...parseLines(tail, tailOffset > 0)];
   let sessionId = path.basename(filePath, ".jsonl");
-  let title = "";
-  let workdir = "";
+  let customTitle = "";
+  let aiTitle = "";
+  let sessionWorkdir = "";
+  let messageWorkdir = "";
   let model = "";
+  let firstPrompt = "";
   let lastPrompt = "";
   let lastResponse = "";
 
-  for (const entry of lines) {
+  const input = createReadStream(filePath, { encoding: "utf8" });
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  for await (const line of lines) {
+    const entry = parseLine(line);
+    if (!entry) continue;
     sessionId = asString(entry.sessionId) || sessionId;
-    title = entry.type === "custom-title" ? asString(entry.customTitle) || title : title;
-    workdir = asString(entry.cwd) || workdir;
-    if (entry.type === "last-prompt") lastPrompt = asString(entry.lastPrompt) || lastPrompt;
+    customTitle = entry.type === "custom-title" ? asString(entry.customTitle) || customTitle : customTitle;
+    aiTitle = entry.type === "ai-title" ? asString(entry.aiTitle) || aiTitle : aiTitle;
+    if (entry.type === "session-meta") {
+      const repository = asRecord(entry.repository);
+      sessionWorkdir = asString(entry.workDir)
+        || asString(repository.requestedWorkDir)
+        || asString(repository.repoRoot)
+        || sessionWorkdir;
+      model = asString(entry.runtimeModelId) || model;
+    }
+    messageWorkdir = asString(entry.cwd) || messageWorkdir;
+    if (entry.type === "last-prompt") {
+      const prompt = asString(entry.lastPrompt);
+      if (!isInternalPrompt(prompt)) {
+        firstPrompt ||= prompt;
+        lastPrompt = prompt || lastPrompt;
+      }
+    }
     const message = asRecord(entry.message);
     const role = asString(message.role);
     if (role === "assistant") {
       model = asString(message.model) || model;
       lastResponse = textContent(message.content) || lastResponse;
     } else if (role === "user") {
-      lastPrompt = textContent(message.content) || lastPrompt;
+      const prompt = textContent(message.content);
+      if (!isInternalPrompt(prompt)) {
+        firstPrompt ||= prompt;
+        lastPrompt = prompt || lastPrompt;
+      }
     }
   }
 
+  const workdir = sessionWorkdir || messageWorkdir;
   if (!workdir || !sessionId) return null;
   return {
     sessionId,
-    title: title || summarize(lastPrompt) || `Haha ${sessionId.slice(0, 8)}`,
+    title: customTitle || aiTitle || summarize(firstPrompt) || `Haha ${sessionId.slice(0, 8)}`,
     workdir,
     model: model || "unknown",
     updatedAt: updatedAt.toISOString(),
@@ -102,27 +126,12 @@ const readSession = async (
   };
 };
 
-const readSlice = async (filePath: string, position: number, length: number) => {
-  const handle = await open(filePath, "r");
+const parseLine = (line: string): JsonLine | null => {
   try {
-    const buffer = Buffer.alloc(length);
-    const { bytesRead } = await handle.read(buffer, 0, length, position);
-    return buffer.subarray(0, bytesRead).toString("utf8");
-  } finally {
-    await handle.close();
+    return JSON.parse(line) as JsonLine;
+  } catch {
+    return null;
   }
-};
-
-const parseLines = (text: string, discardFirst = false): JsonLine[] => {
-  const lines = text.split(/\r?\n/);
-  if (discardFirst) lines.shift();
-  return lines.flatMap((line) => {
-    try {
-      return [JSON.parse(line) as JsonLine];
-    } catch {
-      return [];
-    }
-  });
 };
 
 const discoverChangedFiles = async (workdir: string) => {
@@ -162,6 +171,8 @@ const isUsageProbe = (session: HahaSessionSummary) => {
   const text = `${session.title}\n${session.lastPrompt}`.toLowerCase();
   return text.includes("unknown skill: usage") || /^\s*\/usage\s*$/i.test(session.lastPrompt);
 };
+
+const isInternalPrompt = (value: string) => /^\s*<task-notification(?:\s|>)/i.test(value);
 
 const summarize = (value: string, limit = 120) => {
   const normalized = value.replace(/\s+/g, " ").trim();

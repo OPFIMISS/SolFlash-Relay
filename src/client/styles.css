@@ -148,7 +148,7 @@ button { color: inherit; }
 .conversation-avatar { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 8px; color: var(--accent); background: var(--accent-soft); }
 .conversation-executor .conversation-avatar { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, var(--surface)); }
 .conversation-pane > header > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.conversation-pane > header strong { font-size: 12px; }
+.conversation-pane > header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .conversation-pane > header small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-soft); font-size: 10px; }
 .conversation-messages { display: flex; flex-direction: column; gap: 7px; max-height: 250px; overflow: auto; padding-right: 3px; }
 .conversation-message { padding: 10px 11px; border-left: 3px solid var(--accent); border-radius: 0 7px 7px 0; background: var(--surface-raised); }
@@ -284,7 +284,7 @@ button { color: inherit; }
 .adopt-empty { min-height: 120px; display: grid; place-items: center; color: var(--text-soft); background: var(--surface-muted); border-radius: 8px; font-size: 11px; }
 .adopt-fields { display: grid; grid-template-columns: 0.8fr 1.2fr; gap: 10px; margin-top: 12px; }
 .adopt-fields textarea { min-height: 104px; resize: vertical; padding: 8px 9px; font: 11px/1.5 Consolas, monospace; }
-.adopt-session-id { align-self: center; color: var(--text-soft); font: 10px/1.4 Consolas, monospace; }
+.adopt-session-id { min-width: 0; max-width: 52%; align-self: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-soft); font: 10px/1.4 Consolas, monospace; }
 
 @media (max-width: 1180px) {
   .dashboard-grid { grid-template-columns: minmax(220px, 0.7fr) minmax(450px, 1.5fr); }

@@ -10,8 +10,8 @@ const task = {
   id: "11111111-1111-4111-8111-111111111111",
   sessionId: "22222222-2222-4222-8222-222222222222",
   request: {
-    title: "Implement model selector states",
-    objective: "Add loading, selected, retry, and keyboard states to the existing settings model selector.",
+    title: "修复帧计时并重测GC压力",
+    objective: "接管已有 Haha 项目对话，由主策划审查当前实现并继续发送纠偏指令。",
     workdir: "C:/workspace/example",
     allowedFiles: ["src/pages/Settings.tsx", "src/components/ModelSelector.tsx", "src/api/models.ts"],
     contextFiles: ["src/components/Button.tsx"],
@@ -55,7 +55,9 @@ const task = {
   messages: [
     { id: "m1", role: "planner", agent: "codex", model: "gpt-5.6-sol", timestamp: now, content: "Add model selector states without changing routes.", kind: "instruction" },
     { id: "m2", role: "executor", agent: "claude-haha", model: "deepseek-v4-flash", timestamp: now, content: "Reading the existing selector and implementing the bounded states.", kind: "output" }
-  ]
+  ],
+  origin: "adopted",
+  sourceSessionTitle: "修复帧计时并重测GC压力"
 };
 
 const settings = {
@@ -72,7 +74,7 @@ const settings = {
 };
 
 const config = {
-  version: "0.6.0",
+  version: "0.6.1",
   host: "127.0.0.1",
   port: 17322,
   hahaRoot: "D:\\Claude Code Haha",
@@ -85,7 +87,7 @@ const config = {
 
 const hahaSessions = [{
   sessionId: "33333333-4444-4555-8666-777777777777",
-  title: "example · Flash UI scaffold",
+  title: "修复帧计时并重测GC压力",
   workdir: "C:/workspace/example",
   model: "deepseek-v4-flash",
   updatedAt: now,
@@ -122,6 +124,10 @@ async function capture(browser, name, viewport) {
   await page.route("**/api/haha-sessions**", (route) => route.fulfill({ json: hahaSessions }));
   await page.goto(relayUrl, { waitUntil: "networkidle" });
   await page.waitForSelector(".dashboard-grid");
+  const executorConversationTitle = await page.locator(".conversation-executor header strong").textContent();
+  if (executorConversationTitle !== `B · ${task.sourceSessionTitle}`) {
+    throw new Error(`Executor conversation title did not preserve the Haha title: ${executorConversationTitle}`);
+  }
   await page.screenshot({ path: path.join(".relay-data", `ui-${name}.png`), fullPage: true });
   let motion;
   if (name === "desktop") {

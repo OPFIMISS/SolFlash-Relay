@@ -120,6 +120,7 @@ export interface RelayTask {
   events: RelayEvent[];
   messages: AgentConversationMessage[];
   origin?: "relay" | "adopted";
+  sourceSessionTitle?: string;
 }
 
 export interface HahaSessionSummary {

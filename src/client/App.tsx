@@ -706,6 +706,7 @@ function AdoptHahaDialog({
   onClose: () => void;
   onSubmit: () => void;
 }) {
+  const selectedSession = sessions.find((session) => session.sessionId === selectedId);
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="settings-dialog adopt-dialog" role="dialog" aria-modal="true" aria-labelledby="adopt-title">
@@ -740,7 +741,9 @@ function AdoptHahaDialog({
           <label><span>第一条纠偏指令</span><textarea value={instruction} onChange={(event) => onInstruction(event.target.value)} placeholder="例如：先检查现有实现，不要重写架构；修复状态同步和错误处理，然后运行指定测试。" /></label>
         </div>
         <footer>
-          <span className="adopt-session-id">{selectedId ? `Session ${selectedId.slice(0, 8)}` : "尚未选择会话"}</span>
+          <span className="adopt-session-id" title={selectedSession?.title}>
+            {selectedSession ? `${selectedSession.title} · ${selectedSession.sessionId.slice(0, 8)}` : "尚未选择会话"}
+          </span>
           <div className="dialog-save-actions">
             <button className="secondary-button" onClick={onClose}>取消</button>
             <button className="primary-button" disabled={busy || loading || !selectedId} onClick={onSubmit}><MessagesSquare size={16} />接管并发送</button>
@@ -904,11 +907,19 @@ function ConversationPane({ task, role }: { task: RelayTask; role: "planner" | "
   const model = isPlanner
     ? task.request.plannerModel
     : task.effectiveModel ?? task.requestedModel;
+  const title = isPlanner
+    ? "A · 主策划"
+    : task.sourceSessionTitle
+      ? `B · ${task.sourceSessionTitle}`
+      : "B · 执行";
+  const detail = isPlanner
+    ? `${agent} · ${model}`
+    : `${agent} · ${model} · ${task.sessionId.slice(0, 8)}`;
   return (
     <section className={`conversation-pane conversation-${role}`}>
       <header>
         <span className="conversation-avatar">{isPlanner ? <Code2 size={16} /> : <Bot size={16} />}</span>
-        <div><strong>{isPlanner ? "A · 主策划" : "B · 执行"}</strong><small>{agent} · {model}</small></div>
+        <div><strong title={title}>{title}</strong><small>{detail}</small></div>
         {!isPlanner && <StatusPill status={task.status} />}
       </header>
       <div className="conversation-messages">
