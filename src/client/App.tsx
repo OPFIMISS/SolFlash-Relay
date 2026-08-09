@@ -12,9 +12,11 @@ import {
   Copy,
   FileCode2,
   Folder,
+  FolderSearch,
   Gauge,
   GitCompareArrows,
   Moon,
+  MessagesSquare,
   Percent,
   Power,
   Radio,
@@ -25,6 +27,7 @@ import {
   Server,
   Settings2,
   ShieldAlert,
+  ShieldCheck,
   Sun,
   TerminalSquare,
   TriangleAlert,
@@ -45,6 +48,7 @@ import {
 import type {
   RelayConfigView,
   RelayEvent,
+  HahaSessionSummary,
   RelaySettings,
   RelayTask,
   RelayTaskStatus,
@@ -53,9 +57,11 @@ import type {
 import {
   cancelTask,
   getConfig,
+  getHahaSessions,
   getSettings,
   getTasks,
   getTokenMonitor,
+  importHahaSession,
   markTaskRead,
   sendFollowUp,
   saveSettings,
@@ -127,6 +133,13 @@ export function App() {
   const [settings, setSettings] = useState<RelaySettings | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<RelaySettings | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [adoptOpen, setAdoptOpen] = useState(false);
+  const [adoptWorkdir, setAdoptWorkdir] = useState("");
+  const [hahaSessions, setHahaSessions] = useState<HahaSessionSummary[]>([]);
+  const [adoptSessionId, setAdoptSessionId] = useState("");
+  const [adoptFiles, setAdoptFiles] = useState("");
+  const [adoptInstruction, setAdoptInstruction] = useState("");
+  const [adoptLoading, setAdoptLoading] = useState(false);
   const [desktopMessage, setDesktopMessage] = useState<string | null>(null);
   const [desktopStatus, setDesktopStatus] = useState<DesktopStatus | null>(null);
   const [period, setPeriod] = useState("today");
@@ -243,6 +256,59 @@ export function App() {
     setSettingsOpen(true);
   };
 
+  const scanHahaSessions = async (workdir: string) => {
+    if (!workdir.trim()) return;
+    setAdoptLoading(true);
+    try {
+      const sessions = await getHahaSessions(workdir.trim());
+      setHahaSessions(sessions);
+      const first = sessions[0];
+      setAdoptSessionId(first?.sessionId ?? "");
+      setAdoptFiles(first?.changedFiles.join("\n") ?? "");
+      if (sessions.length === 0) setDesktopMessage("这个项目路径下没有找到可接管的 Haha 对话。");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setAdoptLoading(false);
+    }
+  };
+
+  const openAdoptDialog = () => {
+    const workdir = selected?.request.workdir ?? "";
+    setAdoptWorkdir(workdir);
+    setHahaSessions([]);
+    setAdoptSessionId("");
+    setAdoptFiles("");
+    setAdoptInstruction("");
+    setAdoptOpen(true);
+    if (workdir) void scanHahaSessions(workdir);
+  };
+
+  const submitAdopt = async () => {
+    const allowedFiles = adoptFiles.split(/[\r\n,]+/).map((item) => item.trim()).filter(Boolean);
+    if (!adoptSessionId || allowedFiles.length === 0 || !adoptInstruction.trim()) {
+      setError("请选择 Haha 对话，并填写允许文件和第一条纠偏指令。");
+      return;
+    }
+    setBusy(true);
+    try {
+      const task = await importHahaSession({
+        sessionId: adoptSessionId,
+        workdir: adoptWorkdir.trim(),
+        allowedFiles,
+        instruction: adoptInstruction.trim(),
+      });
+      setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
+      setSelectedId(task.id);
+      setAdoptOpen(false);
+      setDesktopMessage("已接管原 Haha 对话并发送纠偏指令；Relay 将继续使用同一个 sessionId。");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const submitSettings = async () => {
     if (!settingsDraft) return;
     setBusy(true);
@@ -274,6 +340,20 @@ export function App() {
   const copyUsagePrompt = async () => {
     if (!window.relayDesktop) return;
     setDesktopMessage(await window.relayDesktop.copyUsagePrompt());
+  };
+
+  const fixTokenMonitor = async () => {
+    if (!window.relayDesktop) return;
+    setBusy(true);
+    try {
+      const compatibility = await window.relayDesktop.fixTokenMonitor();
+      setDesktopStatus((current) => current ? { ...current, tokenMonitorCompatibility: compatibility } : current);
+      setDesktopMessage(compatibility.message);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const runVisibleFlashCheck = async () => {
@@ -322,6 +402,9 @@ export function App() {
         </div>
 
         <div className="toolbar">
+          <button className="icon-button" title="接管已有 Haha 对话" onClick={openAdoptDialog}>
+            <MessagesSquare size={18} />
+          </button>
           <button className="icon-button" title="Agent 与模型设置" onClick={openSettings}>
             <Settings2 size={18} />
           </button>
@@ -528,12 +611,28 @@ export function App() {
             </div>
             <ConnectionRow label="MCP Relay" value={config ? `${config.host}:${config.port}` : "离线"} online={Boolean(config)} />
             <ConnectionRow label="执行 Agent" value={executor?.label ?? "未配置"} online={Boolean(executor)} />
-            <ConnectionRow label="Token Monitor" value={monitor.connected ? "已接入" : "未运行"} online={monitor.connected} />
+            <ConnectionRow
+              label="Token Monitor"
+              value={desktopStatus?.tokenMonitorCompatibility.risk ? "有对话污染风险" : monitor.connected ? "安全接入" : "未运行"}
+              online={monitor.connected && !desktopStatus?.tokenMonitorCompatibility.risk}
+            />
             <button className="secondary-button self-check-button" disabled={!selected || busy} onClick={() => void runVisibleFlashCheck()} title="会产生一次很小的真实 Flash API 调用">
               <ScanSearch size={16} />验证当前项目的 Flash
             </button>
-            {monitor.connected && config?.hahaShareDesktopState && (
-              <p className="integration-note">若 Haha 出现 “Unknown skill: usage”，那是 Token Monitor 的 /usage 探测会话，不是 Relay 任务。Relay 自检会以 “Visible Flash self-check” 命名。</p>
+            {desktopStatus?.tokenMonitorCompatibility
+              && (desktopStatus.tokenMonitorCompatibility.risk || desktopStatus.tokenMonitorCompatibility.restartRequired) && (
+              <div className={`compatibility-alert ${desktopStatus.tokenMonitorCompatibility.risk ? "danger" : "fixed"}`}>
+                {desktopStatus.tokenMonitorCompatibility.risk ? <ShieldAlert size={17} /> : <ShieldCheck size={17} />}
+                <div>
+                  <strong>{desktopStatus.tokenMonitorCompatibility.risk ? "检测到 Haha 对话污染源" : "Claude 轮询已关闭"}</strong>
+                  <span>{desktopStatus.tokenMonitorCompatibility.message}</span>
+                </div>
+                {desktopStatus.tokenMonitorCompatibility.repairable && (
+                  <button className="secondary-button" disabled={busy} onClick={() => void fixTokenMonitor()}>
+                    <ShieldCheck size={15} />一键修复
+                  </button>
+                )}
+              </div>
             )}
           </section>
         </aside>
@@ -551,6 +650,103 @@ export function App() {
           busy={busy}
         />
       )}
+      {adoptOpen && (
+        <AdoptHahaDialog
+          workdir={adoptWorkdir}
+          sessions={hahaSessions}
+          selectedId={adoptSessionId}
+          allowedFiles={adoptFiles}
+          instruction={adoptInstruction}
+          loading={adoptLoading}
+          busy={busy}
+          onWorkdir={setAdoptWorkdir}
+          onScan={() => void scanHahaSessions(adoptWorkdir)}
+          onSelect={(session) => {
+            setAdoptSessionId(session.sessionId);
+            setAdoptFiles(session.changedFiles.join("\n"));
+          }}
+          onAllowedFiles={setAdoptFiles}
+          onInstruction={setAdoptInstruction}
+          onClose={() => setAdoptOpen(false)}
+          onSubmit={() => void submitAdopt()}
+        />
+      )}
+    </div>
+  );
+}
+
+function AdoptHahaDialog({
+  workdir,
+  sessions,
+  selectedId,
+  allowedFiles,
+  instruction,
+  loading,
+  busy,
+  onWorkdir,
+  onScan,
+  onSelect,
+  onAllowedFiles,
+  onInstruction,
+  onClose,
+  onSubmit,
+}: {
+  workdir: string;
+  sessions: HahaSessionSummary[];
+  selectedId: string;
+  allowedFiles: string;
+  instruction: string;
+  loading: boolean;
+  busy: boolean;
+  onWorkdir: (value: string) => void;
+  onScan: () => void;
+  onSelect: (session: HahaSessionSummary) => void;
+  onAllowedFiles: (value: string) => void;
+  onInstruction: (value: string) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="settings-dialog adopt-dialog" role="dialog" aria-modal="true" aria-labelledby="adopt-title">
+        <header>
+          <div><span className="eyebrow">Existing Session</span><h2 id="adopt-title">接管 Haha 项目对话</h2></div>
+          <button className="icon-button" title="关闭" onClick={onClose}><X size={18} /></button>
+        </header>
+        <p className="adopt-note">先让当前生成停止，再接管。Relay 会恢复原 sessionId，不会创建新对话。</p>
+        <div className="adopt-path-row">
+          <label>
+            <span>项目绝对路径</span>
+            <input value={workdir} onChange={(event) => onWorkdir(event.target.value)} placeholder="C:\workspace\project" />
+          </label>
+          <button className="secondary-button" disabled={loading || !workdir.trim()} onClick={onScan}>
+            <FolderSearch size={16} />{loading ? "扫描中" : "扫描对话"}
+          </button>
+        </div>
+        <div className="adopt-session-list" aria-label="Haha 对话列表">
+          {sessions.length > 0 ? sessions.map((session) => (
+            <button
+              key={session.sessionId}
+              className={session.sessionId === selectedId ? "selected" : ""}
+              onClick={() => onSelect(session)}
+            >
+              <span><strong>{session.title}</strong><small>{session.model} · {formatTime(session.updatedAt)}</small></span>
+              <p>{session.lastResponse || session.lastPrompt || "暂无可预览回复"}</p>
+            </button>
+          )) : <div className="adopt-empty">输入项目路径并扫描可见 Haha 对话</div>}
+        </div>
+        <div className="adopt-fields">
+          <label><span>允许修改的文件</span><textarea value={allowedFiles} onChange={(event) => onAllowedFiles(event.target.value)} placeholder="每行一个相对路径；已自动填入当前 Git 改动" /></label>
+          <label><span>第一条纠偏指令</span><textarea value={instruction} onChange={(event) => onInstruction(event.target.value)} placeholder="例如：先检查现有实现，不要重写架构；修复状态同步和错误处理，然后运行指定测试。" /></label>
+        </div>
+        <footer>
+          <span className="adopt-session-id">{selectedId ? `Session ${selectedId.slice(0, 8)}` : "尚未选择会话"}</span>
+          <div className="dialog-save-actions">
+            <button className="secondary-button" onClick={onClose}>取消</button>
+            <button className="primary-button" disabled={busy || loading || !selectedId} onClick={onSubmit}><MessagesSquare size={16} />接管并发送</button>
+          </div>
+        </footer>
+      </section>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 {
   "name": "sol-flash-relay",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "A local MCP control plane that lets Codex Sol delegate bounded work to Claude Code Haha Flash without moving API credentials or conversations.",
   "author": "SolFlash Relay",
@@ -27,6 +27,8 @@
     "test:mcp": "tsx src/server/mcp-test.ts",
     "test:mcp:packaged": "node scripts/packaged-mcp-test.cjs",
     "test:codex-config": "node scripts/codex-config-test.cjs",
+    "test:token-monitor-compat": "node scripts/token-monitor-compat-test.cjs",
+    "test:haha-sessions": "tsx src/server/haha-sessions-test.ts",
     "test:token-monitor": "tsx src/server/token-monitor-test.ts",
     "test:ui": "node scripts/capture-ui.cjs",
     "test:desktop": "node scripts/desktop-smoke.cjs",

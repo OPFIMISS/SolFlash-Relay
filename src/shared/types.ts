@@ -119,6 +119,25 @@ export interface RelayTask {
   usage: RelayUsage;
   events: RelayEvent[];
   messages: AgentConversationMessage[];
+  origin?: "relay" | "adopted";
+}
+
+export interface HahaSessionSummary {
+  sessionId: string;
+  title: string;
+  workdir: string;
+  model: string;
+  updatedAt: string;
+  lastPrompt: string;
+  lastResponse: string;
+  changedFiles: string[];
+}
+
+export interface HahaSessionImportRequest {
+  sessionId: string;
+  workdir: string;
+  allowedFiles: string[];
+  instruction: string;
 }
 
 export interface RelayEvent {

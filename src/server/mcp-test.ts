@@ -65,6 +65,8 @@ try {
     "flash_start",
     "flash_status",
     "flash_wait",
+    "haha_adopt",
+    "haha_sessions",
     "relay_profiles",
     "relay_register_agent",
     "relay_set_profile",

@@ -34,6 +34,7 @@ export class TaskStore extends EventEmitter {
         task.modelWarning ??= null;
         task.unread ??= false;
         task.messages ??= migrateMessages(task);
+        task.origin ??= "relay";
         if (task.status === "running" || task.status === "waiting") {
           task.status = "failed";
           task.error = "Relay restarted while this task was active.";

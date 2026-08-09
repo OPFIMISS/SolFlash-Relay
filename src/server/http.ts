@@ -4,8 +4,9 @@ import { fileURLToPath } from "node:url";
 
 import express from "express";
 
-import type { AgentDefinition, RelaySettings, RelayTaskRequest } from "../shared/types.js";
+import type { AgentDefinition, HahaSessionImportRequest, RelaySettings, RelayTaskRequest } from "../shared/types.js";
 import { discoverHahaModels } from "./agent-runner.js";
+import { discoverHahaSessions } from "./haha-sessions.js";
 import { publicConfig, relayVersion, type RelayConfig } from "./config.js";
 import { TaskManager } from "./task-manager.js";
 import { TaskStore } from "./task-store.js";
@@ -56,6 +57,30 @@ export const startHttpServer = (
     }
   });
   app.get("/api/tasks", (_request, response) => response.json(manager.list()));
+  app.get("/api/haha-sessions", async (request, response) => {
+    try {
+      response.json(await discoverHahaSessions(relayConfig, String(request.query.workdir ?? "")));
+    } catch (error) {
+      response.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+  app.post("/api/tasks/import-haha", async (request, response) => {
+    try {
+      const input = request.body as HahaSessionImportRequest;
+      if (!input.sessionId?.trim() || !input.workdir?.trim()) {
+        return response.status(400).json({ error: "sessionId and workdir are required." });
+      }
+      if (!input.instruction?.trim()) {
+        return response.status(400).json({ error: "instruction is required." });
+      }
+      const sessions = await discoverHahaSessions(relayConfig, input.workdir);
+      const session = sessions.find((item) => item.sessionId === input.sessionId);
+      if (!session) return response.status(404).json({ error: "Haha session not found for this project path." });
+      return response.status(202).json(await manager.adopt(session, input.allowedFiles ?? [], input.instruction ?? ""));
+    } catch (error) {
+      return response.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
   app.get("/api/tasks/:id", (request, response) => {
     const task = manager.get(request.params.id);
     if (!task) return response.status(404).json({ error: "Task not found" });

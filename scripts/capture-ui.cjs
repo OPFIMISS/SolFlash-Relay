@@ -72,7 +72,7 @@ const settings = {
 };
 
 const config = {
-  version: "0.5.0",
+  version: "0.6.0",
   host: "127.0.0.1",
   port: 17322,
   hahaRoot: "D:\\Claude Code Haha",
@@ -82,6 +82,17 @@ const config = {
   tokenMonitorProjectLabel: "SolFlashRelay",
   hahaShareDesktopState: true
 };
+
+const hahaSessions = [{
+  sessionId: "33333333-4444-4555-8666-777777777777",
+  title: "example · Flash UI scaffold",
+  workdir: "C:/workspace/example",
+  model: "deepseek-v4-flash",
+  updatedAt: now,
+  lastPrompt: "Build the first UI scaffold.",
+  lastResponse: "The scaffold is ready, but state synchronization and retry handling still need review.",
+  changedFiles: ["src/pages/Settings.tsx", "src/components/ModelSelector.tsx"],
+}];
 
 const monitor = {
   connected: true,
@@ -108,6 +119,7 @@ async function capture(browser, name, viewport) {
   await page.route("**/api/config", (route) => route.fulfill({ json: config }));
   await page.route("**/api/settings", (route) => route.fulfill({ json: settings }));
   await page.route("**/api/token-monitor**", (route) => route.fulfill({ json: monitor }));
+  await page.route("**/api/haha-sessions**", (route) => route.fulfill({ json: hahaSessions }));
   await page.goto(relayUrl, { waitUntil: "networkidle" });
   await page.waitForSelector(".dashboard-grid");
   await page.screenshot({ path: path.join(".relay-data", `ui-${name}.png`), fullPage: true });
@@ -146,6 +158,28 @@ async function capture(browser, name, viewport) {
     const customModel = executorSettings.locator(".model-field input");
     await customModel.fill("luna-code-preview");
     if ((await customModel.inputValue()) !== "luna-code-preview") throw new Error("Custom intermediary model ID was not accepted");
+    await page.getByTitle("关闭").click();
+    await page.getByTitle("接管已有 Haha 对话").click();
+    await page.waitForSelector(".adopt-dialog");
+    await page.waitForSelector(".adopt-session-list button.selected");
+    const adoptedFiles = await page.locator(".adopt-fields textarea").first().inputValue();
+    if (!adoptedFiles.includes("src/pages/Settings.tsx")) {
+      throw new Error(`Adopt dialog did not suggest changed files: ${adoptedFiles}`);
+    }
+    await page.locator(".adopt-fields textarea").nth(1).fill("Review the existing scaffold and fix state synchronization only.");
+    await page.waitForTimeout(350);
+    await page.screenshot({ path: path.join(".relay-data", "ui-adopt-haha.png") });
+    await page.getByTitle("关闭").click();
+  } else if (name === "mobile") {
+    await page.getByTitle("接管已有 Haha 对话").click();
+    await page.waitForSelector(".adopt-dialog");
+    await page.waitForSelector(".adopt-session-list button.selected");
+    await page.waitForTimeout(350);
+    const dialogOverflow = await page.locator(".adopt-dialog").evaluate((element) =>
+      element.scrollWidth > element.clientWidth + 1,
+    );
+    if (dialogOverflow) throw new Error("Adopt dialog has horizontal overflow on mobile");
+    await page.screenshot({ path: path.join(".relay-data", "ui-adopt-haha-mobile.png"), fullPage: true });
     await page.getByTitle("关闭").click();
   }
 

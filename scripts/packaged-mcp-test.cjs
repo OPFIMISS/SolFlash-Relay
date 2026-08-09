@@ -76,8 +76,10 @@ async function stopTestDaemon() {
   try {
     const result = await withTimeout(client.listTools(), "portable MCP listTools");
     const names = result.tools.map((tool) => tool.name).sort();
-    if (names.length !== 11 || !names.includes("agent_run")) {
-      throw new Error(`Expected 11 MCP tools including agent_run, received: ${names.join(", ")}`);
+    const expected = ["agent_run", "haha_adopt", "haha_sessions"];
+    const missing = expected.filter((name) => !names.includes(name));
+    if (missing.length > 0) {
+      throw new Error(`Missing packaged MCP tools (${missing.join(", ")}): ${names.join(", ")}`);
     }
 
     const health = await withTimeout(fetch(`${relayUrl}/api/health`), "portable daemon health");

@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 
 import type {
   AgentConversationKind,
+  HahaSessionSummary,
   RelayEvent,
   RelayEventKind,
   RelayTask,
@@ -136,6 +137,68 @@ export class TaskManager {
     await this.#message(task, "planner", "follow-up", instruction.trim());
     void this.#run(task, this.#buildFollowUpPrompt(task, instruction), true);
     return task;
+  }
+
+  async adopt(session: HahaSessionSummary, allowedFiles: string[], instruction: string) {
+    if (!this.relayConfig.hahaShareDesktopState) {
+      throw new Error("Adopting desktop Haha sessions requires HAHA_SHARE_DESKTOP_STATE=true.");
+    }
+    if (!instruction.trim()) throw new Error("A first correction instruction is required.");
+    const settings = this.settingsStore.get();
+    const executorAgent = settings.agents.find((agent) =>
+      agent.enabled && agent.transport === "haha-sidecar" && agent.role !== "planner"
+    )?.id ?? settings.executorAgent;
+    this.#requireExecutor(executorAgent);
+    const requestedModel = session.model && session.model !== "unknown"
+      ? session.model
+      : settings.executorModel;
+    const normalized = await this.#validateRequest({
+      title: `接管 · ${session.title}`,
+      objective: "接管已有 Haha 项目对话，由主策划审查当前实现并继续发送纠偏指令。",
+      workdir: session.workdir,
+      allowedFiles,
+      contextFiles: [],
+      constraints: ["Preserve unrelated user changes.", "Do not create a new session; resume the adopted session."],
+      acceptanceCommands: [],
+      plannerAgent: settings.plannerAgent,
+      plannerModel: settings.plannerModel,
+      executorAgent,
+      model: requestedModel,
+      effort: settings.executorEffort,
+    });
+    const now = new Date().toISOString();
+    const task: RelayTask = {
+      id: randomUUID(),
+      sessionId: session.sessionId,
+      request: normalized,
+      status: "waiting",
+      createdAt: now,
+      startedAt: null,
+      finishedAt: null,
+      updatedAt: now,
+      summary: session.lastResponse,
+      error: null,
+      changedFiles: session.changedFiles,
+      scopeWarnings: [],
+      projectName: path.basename(normalized.workdir),
+      requestedModel,
+      effectiveModel: session.model === "unknown" ? null : session.model,
+      modelWarning: null,
+      unread: false,
+      usage: emptyUsage(),
+      events: [],
+      messages: [],
+      origin: "adopted",
+    };
+
+    await this.store.set(task);
+    await this.#message(task, "planner", "instruction", `已接管 Haha 会话 ${session.sessionId}。`);
+    if (session.lastResponse) await this.#message(task, "executor", "output", session.lastResponse);
+    await this.#event(task, "task.created", `Adopted existing Haha session: ${session.title}`, {
+      sessionId: session.sessionId,
+      workdir: session.workdir,
+    });
+    return this.send(task.id, instruction.trim());
   }
 
   async cancel(taskId: string) {

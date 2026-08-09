@@ -7,6 +7,7 @@ import type { RelayRuntime } from "../server/runtime.js";
 import { relayVersion } from "../server/config.js";
 import type { RelayTask } from "../shared/types.js";
 import { buildCodexMcpBlock, hasInstalledCodexMcp, mergeCodexMcpBlock } from "./codex-config.js";
+import { disableTokenMonitorClaudePolling, inspectTokenMonitorCompatibility } from "./token-monitor-compat.js";
 
 const relayUrl = `http://${process.env.RELAY_HOST ?? "127.0.0.1"}:${process.env.RELAY_PORT ?? "17322"}`;
 const backgroundMode = process.argv.includes("--background");
@@ -192,6 +193,7 @@ function createApplicationMenu() {
 function registerIpc() {
   ipcMain.handle("relay:install-mcp", installMcpConfig);
   ipcMain.handle("relay:get-status", getDesktopStatus);
+  ipcMain.handle("relay:fix-token-monitor", fixTokenMonitorCompatibility);
   ipcMain.handle("relay:copy-usage-prompt", () => {
     clipboard.writeText(usagePrompt);
     return "已复制 Codex 使用指令。";
@@ -215,7 +217,12 @@ async function getDesktopStatus() {
     mcpInstalled: hasInstalledCodexMcp(current, process.execPath),
     configPath: codexConfigPath(),
     unreadTasks: unreadTaskIds.size,
+    tokenMonitorCompatibility: await inspectTokenMonitorCompatibility(tokenMonitorSettingsPath()),
   };
+}
+
+async function fixTokenMonitorCompatibility() {
+  return disableTokenMonitorClaudePolling(tokenMonitorSettingsPath());
 }
 
 async function installMcpConfig() {
@@ -353,5 +360,8 @@ const desktopExecutable = () => process.env.PORTABLE_EXECUTABLE_FILE || process.
 
 const codexConfigPath = () => process.env.RELAY_CODEX_CONFIG
   || path.join(app.getPath("home"), ".codex", "config.toml");
+
+const tokenMonitorSettingsPath = () => process.env.RELAY_TOKEN_MONITOR_SETTINGS
+  || path.join(app.getPath("appData"), "Token Monitor", "settings.json");
 
 const usagePrompt = `使用 SolFlash Relay 完成这个任务。你负责架构、UI 决策和最终审查；在明确文件范围、约束和验收命令后，优先通过 agent_run 把机械实现交给执行 Agent并等待最终回复。必须传入当前项目的绝对路径，完成后检查真实 diff 和测试，只在必要时用 flash_send 定点返工；需要异步运行时才使用 agent_start。`;

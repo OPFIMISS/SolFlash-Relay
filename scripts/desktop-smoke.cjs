@@ -1,12 +1,22 @@
 const { _electron: electron } = require("playwright");
-const { rm } = require("node:fs/promises");
+const { mkdir, readFile, rm, writeFile } = require("node:fs/promises");
 const path = require("node:path");
 
 (async () => {
+  const phase = (name) => console.log(`[desktop-smoke] ${name}`);
   const dataDir = path.resolve(".relay-data", "desktop-smoke");
   const userDataDir = path.resolve(".relay-data", "desktop-smoke-user-data");
+  const tokenMonitorSettings = path.resolve(".relay-data", "desktop-smoke-token-monitor", "settings.json");
   await rm(dataDir, { recursive: true, force: true });
   await rm(userDataDir, { recursive: true, force: true });
+  await mkdir(path.dirname(tokenMonitorSettings), { recursive: true });
+  await writeFile(tokenMonitorSettings, JSON.stringify({
+    limitsEnabled: true,
+    limitsRefreshMs: 300000,
+    limitProviders: "claude,codex,deepseek",
+    preserved: "yes",
+  }), "utf8");
+  phase("launching Electron");
   const electronApp = await electron.launch({
     args: ["."],
     cwd: process.cwd(),
@@ -15,11 +25,14 @@ const path = require("node:path");
       RELAY_PORT: "17426",
       RELAY_DATA_DIR: dataDir,
       RELAY_USER_DATA_DIR: userDataDir,
+      RELAY_TOKEN_MONITOR_SETTINGS: tokenMonitorSettings,
     },
   });
   try {
+    phase("waiting for main window");
     const window = await electronApp.firstWindow({ timeout: 15000 });
     await window.waitForSelector(".dashboard-grid");
+    phase("dashboard ready");
     const audit = await window.evaluate(async () => ({
       desktopBridge: Boolean(window.relayDesktop),
       desktopStatus: await window.relayDesktop?.getStatus(),
@@ -34,6 +47,17 @@ const path = require("node:path");
       throw new Error("Desktop activation status or usage prompt bridge is unavailable");
     }
     if (audit.horizontalOverflow) throw new Error("Desktop window has horizontal overflow");
+    await window.waitForSelector(".compatibility-alert.danger");
+    phase("compatibility risk detected");
+    await window.screenshot({ path: path.join(".relay-data", "token-monitor-risk.png"), fullPage: true });
+    await window.getByRole("button", { name: "一键修复" }).click();
+    await window.waitForSelector(".compatibility-alert.fixed");
+    phase("compatibility risk repaired");
+    await window.screenshot({ path: path.join(".relay-data", "token-monitor-fixed.png"), fullPage: true });
+    const repairedSettings = JSON.parse(await readFile(tokenMonitorSettings, "utf8"));
+    if (repairedSettings.limitProviders !== "codex,deepseek" || repairedSettings.preserved !== "yes") {
+      throw new Error(`Token Monitor compatibility repair changed unexpected settings: ${JSON.stringify(repairedSettings)}`);
+    }
     await window.screenshot({ path: path.join(".relay-data", "desktop-window.png"), fullPage: true });
     await window.getByTitle("Agent 与模型设置").click();
     await window.waitForSelector(".settings-dialog");
@@ -43,6 +67,7 @@ const path = require("node:path");
     }
     await window.screenshot({ path: path.join(".relay-data", "desktop-settings.png"), fullPage: true });
     await window.getByTitle("关闭").click();
+    phase("settings dialog verified");
 
     await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].hide());
     await window.waitForTimeout(150);
@@ -109,6 +134,7 @@ const path = require("node:path");
     if (notificationAudit.desktop?.unreadTasks !== 0 || notificationAudit.task.unread) {
       throw new Error("Focusing Relay did not clear the unread badge and task state");
     }
+    phase("notification flow verified");
 
     await window.setViewportSize({ width: 980, height: 680 });
     const minimumSize = await window.evaluate(() => ({
@@ -126,6 +152,7 @@ const path = require("node:path");
       return { windows: windows.length, visible: windows.some((item) => item.isVisible()) };
     });
     if (background.visible) throw new Error("Closing the desktop window did not hide it to the background");
+    phase("background hosting verified");
 
     console.log(JSON.stringify({ ok: true, audit, notificationAudit, minimumSize, background }));
   } finally {

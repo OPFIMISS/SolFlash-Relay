@@ -1,5 +1,7 @@
 import type {
   RelayConfigView,
+  HahaSessionImportRequest,
+  HahaSessionSummary,
   RelaySettings,
   RelayTask,
   TokenMonitorSummary,
@@ -12,6 +14,14 @@ const json = async <T>(response: Response): Promise<T> => {
 };
 
 export const getTasks = () => fetch("/api/tasks").then(json<RelayTask[]>);
+export const getHahaSessions = (workdir: string) =>
+  fetch(`/api/haha-sessions?workdir=${encodeURIComponent(workdir)}`).then(json<HahaSessionSummary[]>);
+export const importHahaSession = (request: HahaSessionImportRequest) =>
+  fetch("/api/tasks/import-haha", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  }).then(json<RelayTask>);
 export const getConfig = () =>
   fetch("/api/config").then(json<RelayConfigView>);
 export const getSettings = () =>

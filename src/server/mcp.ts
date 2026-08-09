@@ -214,6 +214,69 @@ server.registerTool(
 );
 
 server.registerTool(
+  "haha_sessions",
+  {
+    title: "List adoptable Haha conversations",
+    description:
+      "List native Claude Code Haha conversations for one exact project path. Use this before haha_adopt when Flash already started work outside Relay.",
+    inputSchema: {
+      workdir: z.string().min(1).describe("Absolute path of the current Codex project."),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ workdir }) => {
+    try {
+      return textResult(await requestJson(`/api/haha-sessions?workdir=${encodeURIComponent(workdir)}`));
+    } catch (error) {
+      return textResult({ error: error instanceof Error ? error.message : String(error) }, true);
+    }
+  },
+);
+
+server.registerTool(
+  "haha_adopt",
+  {
+    title: "Adopt and correct an existing Haha conversation",
+    description:
+      "Resume an existing Haha conversation under the same absolute project path and sessionId, send Sol's bounded correction, and wait for the final reply. The active Haha generation must be stopped first.",
+    inputSchema: {
+      sessionId: z.string().uuid(),
+      workdir: z.string().min(1),
+      allowedFiles: z.array(z.string().min(1)).min(1),
+      instruction: z.string().min(1),
+      timeoutSeconds: z.number().int().min(30).max(3600).default(900),
+    },
+    annotations: { destructiveHint: true, openWorldHint: false },
+  },
+  async ({ timeoutSeconds, ...request }) => {
+    try {
+      let task = await requestJson<RelayTask>("/api/tasks/import-haha", {
+        method: "POST",
+        body: JSON.stringify(request),
+      });
+      const deadline = Date.now() + timeoutSeconds * 1000;
+      while (!isTerminal(task.status) && Date.now() < deadline) {
+        const query = new URLSearchParams({
+          afterUpdatedAt: task.updatedAt,
+          timeoutSeconds: String(Math.min(60, Math.max(1, Math.ceil((deadline - Date.now()) / 1000)))),
+        });
+        task = await requestJson<RelayTask>(`/api/tasks/${task.id}/wait?${query}`);
+      }
+      if (!isTerminal(task.status)) {
+        return textResult({
+          ...conciseTask(task),
+          timedOut: true,
+          next: "Call flash_wait with this task ID; the adopted Haha session is still running.",
+        });
+      }
+      return textResult(conciseTask(task), task.status === "failed");
+    } catch (error) {
+      return textResult({ error: error instanceof Error ? error.message : String(error) }, true);
+    }
+  },
+);
+
+server.registerTool(
   "relay_set_profile",
   {
     title: "Set Relay Agent profile",
