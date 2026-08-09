@@ -1,6 +1,6 @@
 {
   "name": "sol-flash-relay",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "private": true,
   "description": "A local MCP control plane that lets Codex Sol delegate bounded work to Claude Code Haha Flash without moving API credentials or conversations.",
   "author": "SolFlash Relay",
@@ -24,6 +24,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test:server": "tsx src/server/self-test.ts",
     "test:agents": "tsx src/server/agent-runner-test.ts",
+    "test:planner-workflow": "tsx src/server/planner-workflow-test.ts",
+    "test:planner:live": "tsx src/server/planner-live-test.ts",
+    "test:planner-led:live": "tsx src/server/planner-led-live-test.ts",
     "test:mcp": "tsx src/server/mcp-test.ts",
     "test:mcp:packaged": "node scripts/packaged-mcp-test.cjs",
     "test:codex-config": "node scripts/codex-config-test.cjs",
@@ -38,6 +41,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@openai/codex": "^0.147.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "lucide-react": "^1.30.0",
@@ -64,6 +68,9 @@
     "appId": "com.solflash.relay",
     "productName": "SolFlash Relay",
     "asar": true,
+    "asarUnpack": [
+      "node_modules/@openai/codex-win32-x64/vendor/**/*"
+    ],
     "directories": {
       "output": "release"
     },

@@ -18,6 +18,7 @@ import {
   Moon,
   MessagesSquare,
   Percent,
+  Plus,
   Power,
   Radio,
   RefreshCw,
@@ -65,8 +66,10 @@ import {
   importHahaSession,
   markTaskRead,
   sendFollowUp,
+  sendPlannerFollowUp,
   saveSettings,
   startVisibleFlashCheck,
+  startPlannerTask,
 } from "./api";
 
 const emptyMonitor: TokenMonitorSummary = {
@@ -89,6 +92,21 @@ const emptyMonitor: TokenMonitorSummary = {
 
 type DesktopStatus = Awaited<ReturnType<NonNullable<Window["relayDesktop"]>["getStatus"]>>;
 
+interface NewTaskDraft {
+  title: string;
+  objective: string;
+  workdir: string;
+  allowedFiles: string;
+  constraints: string;
+  acceptanceCommands: string;
+  plannerAgent: string;
+  plannerModel: string;
+  executorAgent: string;
+  executorModel: string;
+  effort: RelaySettings["executorEffort"];
+  reviewAfterExecution: boolean;
+}
+
 const statusLabels: Record<RelayTaskStatus, string> = {
   queued: "排队中",
   running: "执行中",
@@ -107,6 +125,15 @@ const statusIcons: Record<RelayTaskStatus, typeof Clock3> = {
   cancelled: CircleStop,
 };
 
+const workflowLabel = (task: RelayTask) => {
+  if (!task.workflowMode || task.workflowMode === "direct") return statusLabels[task.status];
+  if (task.workflowPhase === "planner-review") return "Sol 审查中";
+  if (task.workflowPhase === "executor-run") return task.status === "queued" ? "等待 Flash" : "Flash 执行中";
+  if (task.workflowPhase === "planner-verification") return "Sol 复审中";
+  if (task.workflowPhase === "completed") return "Sol 验收完成";
+  return statusLabels[task.status];
+};
+
 const tokenColors = ["#30796e", "#de6a49", "#d6a33a", "#5792a5"];
 
 const formatTokens = (value: number) => {
@@ -116,6 +143,7 @@ const formatTokens = (value: number) => {
 };
 
 const formatCost = (value: number) => `$${value.toFixed(value < 1 ? 4 : 2)}`;
+const splitLines = (value: string) => value.split(/[\r\n,]+/).map((item) => item.trim()).filter(Boolean);
 
 const formatTime = (value: string | null) => {
   if (!value) return "--";
@@ -134,6 +162,8 @@ export function App() {
   const [settings, setSettings] = useState<RelaySettings | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<RelaySettings | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [newTaskOpen, setNewTaskOpen] = useState(false);
+  const [newTaskDraft, setNewTaskDraft] = useState<NewTaskDraft | null>(null);
   const [adoptOpen, setAdoptOpen] = useState(false);
   const [adoptWorkdir, setAdoptWorkdir] = useState("");
   const [hahaSessions, setHahaSessions] = useState<HahaSessionSummary[]>([]);
@@ -233,7 +263,9 @@ export function App() {
     if (!selected || !followUp.trim()) return;
     setBusy(true);
     try {
-      const next = await sendFollowUp(selected.id, followUp.trim());
+      const next = selected.workflowMode === "planner-adoption"
+        ? await sendPlannerFollowUp(selected.id, followUp.trim())
+        : await sendFollowUp(selected.id, followUp.trim());
       setTasks((current) => [next, ...current.filter((task) => task.id !== next.id)]);
       setFollowUp("");
     } catch (nextError) {
@@ -273,6 +305,57 @@ export function App() {
     if (!settings) return;
     setSettingsDraft(structuredClone(settings));
     setSettingsOpen(true);
+  };
+
+  const openNewTaskDialog = () => {
+    if (!settings) return;
+    setNewTaskDraft({
+      title: "",
+      objective: "",
+      workdir: "",
+      allowedFiles: "",
+      constraints: "保留无关的用户改动\n不要提交、重置或覆盖工作区",
+      acceptanceCommands: "",
+      plannerAgent: settings.plannerAgent,
+      plannerModel: settings.plannerModel,
+      executorAgent: settings.executorAgent,
+      executorModel: settings.executorModel,
+      effort: settings.executorEffort,
+      reviewAfterExecution: true,
+    });
+    setNewTaskOpen(true);
+  };
+
+  const submitNewTask = async () => {
+    if (!newTaskDraft?.objective.trim()) {
+      setError("请填写任务需求。");
+      return;
+    }
+    setBusy(true);
+    try {
+      const task = await startPlannerTask({
+        title: newTaskDraft.title.trim() || newTaskDraft.objective.trim().slice(0, 36),
+        objective: newTaskDraft.objective.trim(),
+        workdir: newTaskDraft.workdir.trim(),
+        allowedFiles: splitLines(newTaskDraft.allowedFiles),
+        constraints: splitLines(newTaskDraft.constraints),
+        acceptanceCommands: splitLines(newTaskDraft.acceptanceCommands),
+        plannerAgent: newTaskDraft.plannerAgent,
+        plannerModel: newTaskDraft.plannerModel,
+        executorAgent: newTaskDraft.executorAgent,
+        model: newTaskDraft.executorModel,
+        effort: newTaskDraft.effort,
+        reviewAfterExecution: newTaskDraft.reviewAfterExecution,
+      });
+      setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
+      setSelectedId(task.id);
+      setNewTaskOpen(false);
+      setDesktopMessage("任务已交给真实主策划 Agent。策划完成后，Relay 才会创建同路径的执行 Agent 对话。");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const scanHahaSessions = async (workdir: string) => {
@@ -320,7 +403,7 @@ export function App() {
       setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
       setSelectedId(task.id);
       setAdoptOpen(false);
-      setDesktopMessage("已接管原 Haha 对话并发送纠偏指令；Relay 将继续使用同一个 sessionId。");
+      setDesktopMessage("接管已启动：Relay 正在相同项目目录创建真实 Codex / Sol 对话。Sol 审查完成后才会把纠偏指令发送给原 Haha sessionId。");
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
@@ -421,6 +504,9 @@ export function App() {
         </div>
 
         <div className="toolbar">
+          <button className="icon-button" title="新建主策划任务" onClick={openNewTaskDialog}>
+            <Plus size={18} />
+          </button>
           <button className="icon-button" title="接管已有 Haha 对话" onClick={openAdoptDialog}>
             <MessagesSquare size={18} />
           </button>
@@ -510,7 +596,7 @@ export function App() {
             <>
               <div className="detail-header">
                 <div className="detail-title">
-                  <StatusPill status={selected.status} />
+                  <StatusPill status={selected.status} label={workflowLabel(selected)} />
                   <h2 id="detail-title">{selected.request.title}</h2>
                   <p>{selected.request.objective}</p>
                   <div className="project-context">
@@ -578,23 +664,23 @@ export function App() {
               </div>
 
               <div className="follow-up-bar">
-                <label htmlFor="follow-up">策划端返工指令</label>
+                <label htmlFor="follow-up">{selected.workflowMode === "planner-adoption" ? "给 Codex / Sol 的补充决策要求" : "策划端返工指令"}</label>
                 <div className="follow-up-input">
                   <textarea
                     id="follow-up"
                     value={followUp}
                     onChange={(event) => setFollowUp(event.target.value)}
-                    placeholder="输入经过审查后的定点修复要求"
+                    placeholder={selected.workflowMode === "planner-adoption" ? "Sol 会先在同一个 Codex 对话中审查，再决定给 Flash 的指令" : "输入经过审查后的定点修复要求"}
                     rows={2}
                   />
                   <button
                     className="primary-button"
-                    disabled={busy || !followUp.trim() || selected.status === "running"}
+                    disabled={busy || !followUp.trim() || selected.status === "running" || selected.status === "queued" || selected.status === "waiting"}
                     onClick={() => void submitFollowUp()}
-                    title="恢复同一执行 Agent 会话"
+                    title={selected.workflowMode === "planner-adoption" ? "继续同一个 Codex 决策对话" : "恢复同一执行 Agent 会话"}
                   >
                     <Send size={18} />
-                    发送
+                    {selected.workflowMode === "planner-adoption" ? "交给 Sol" : "发送"}
                   </button>
                 </div>
               </div>
@@ -670,6 +756,16 @@ export function App() {
           busy={busy}
         />
       )}
+      {newTaskOpen && newTaskDraft && settings && (
+        <NewTaskDialog
+          draft={newTaskDraft}
+          settings={settings}
+          busy={busy}
+          onChange={setNewTaskDraft}
+          onClose={() => setNewTaskOpen(false)}
+          onSubmit={() => void submitNewTask()}
+        />
+      )}
       {adoptOpen && (
         <AdoptHahaDialog
           workdir={adoptWorkdir}
@@ -691,6 +787,86 @@ export function App() {
           onSubmit={() => void submitAdopt()}
         />
       )}
+    </div>
+  );
+}
+
+function NewTaskDialog({
+  draft,
+  settings,
+  busy,
+  onChange,
+  onClose,
+  onSubmit,
+}: {
+  draft: NewTaskDraft;
+  settings: RelaySettings;
+  busy: boolean;
+  onChange: (draft: NewTaskDraft) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  const planners = settings.agents.filter((agent) => agent.enabled && agent.role !== "executor");
+  const executors = settings.agents.filter((agent) => agent.enabled && agent.role !== "planner" && agent.transport !== "host");
+  const planner = planners.find((agent) => agent.id === draft.plannerAgent);
+  const executor = executors.find((agent) => agent.id === draft.executorAgent);
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="settings-dialog new-task-dialog" role="dialog" aria-modal="true" aria-labelledby="new-task-title">
+        <header>
+          <div><span className="eyebrow">Planner First</span><h2 id="new-task-title">新建多 Agent 任务</h2></div>
+          <button className="icon-button" title="关闭" onClick={onClose}><X size={18} /></button>
+        </header>
+        <p className="adopt-note">主策划会先在项目路径创建真实对话并规划，再让执行 Agent 在同一路径新建对话。路径留空时，Relay 会创建独立的托管工作目录。</p>
+        <div className="new-task-main-fields">
+          <label><span>任务标题（可选）</span><input value={draft.title} onChange={(event) => onChange({ ...draft, title: event.target.value })} placeholder="根据需求自动生成" /></label>
+          <label><span>项目绝对路径（可选）</span><input value={draft.workdir} onChange={(event) => onChange({ ...draft, workdir: event.target.value })} placeholder="留空则创建 Relay 托管目录" /></label>
+          <label className="new-task-objective"><span>想法 / 需求</span><textarea value={draft.objective} onChange={(event) => onChange({ ...draft, objective: event.target.value })} placeholder="描述你想做什么。主策划会先检查项目、决定框架和执行边界。" /></label>
+        </div>
+        <div className="settings-columns">
+          <fieldset>
+            <legend>主策划</legend>
+            <label>Agent</label>
+            <select value={draft.plannerAgent} onChange={(event) => {
+              const next = planners.find((agent) => agent.id === event.target.value);
+              onChange({ ...draft, plannerAgent: event.target.value, plannerModel: next?.defaultModel ?? "" });
+            }}>
+              {planners.map((agent) => <option key={agent.id} value={agent.id}>{agent.label}</option>)}
+            </select>
+            <label>模型</label>
+            <ModelField models={planner?.models ?? []} value={draft.plannerModel} onChange={(plannerModel) => onChange({ ...draft, plannerModel })} />
+          </fieldset>
+          <fieldset>
+            <legend>执行端</legend>
+            <label>Agent</label>
+            <select value={draft.executorAgent} onChange={(event) => {
+              const next = executors.find((agent) => agent.id === event.target.value);
+              onChange({ ...draft, executorAgent: event.target.value, executorModel: next?.defaultModel ?? "" });
+            }}>
+              {executors.map((agent) => <option key={agent.id} value={agent.id}>{agent.label}</option>)}
+            </select>
+            <label>模型</label>
+            <ModelField models={executor?.models ?? []} value={draft.executorModel} onChange={(executorModel) => onChange({ ...draft, executorModel })} />
+            <label>思考强度</label>
+            <select value={draft.effort} onChange={(event) => onChange({ ...draft, effort: event.target.value as NewTaskDraft["effort"] })}>
+              <option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="xhigh">超高</option><option value="max">最大</option>
+            </select>
+          </fieldset>
+        </div>
+        <div className="adopt-fields new-task-scope-fields">
+          <label><span>允许修改的文件 / 目录</span><textarea value={draft.allowedFiles} onChange={(event) => onChange({ ...draft, allowedFiles: event.target.value })} placeholder="每行一个；留空表示整个项目" /></label>
+          <label><span>约束</span><textarea value={draft.constraints} onChange={(event) => onChange({ ...draft, constraints: event.target.value })} /></label>
+          <label><span>验收命令</span><textarea value={draft.acceptanceCommands} onChange={(event) => onChange({ ...draft, acceptanceCommands: event.target.value })} placeholder="每行一个；可留空让主策划决定" /></label>
+        </div>
+        <label className="review-toggle"><input type="checkbox" checked={draft.reviewAfterExecution} onChange={(event) => onChange({ ...draft, reviewAfterExecution: event.target.checked })} /><span><strong>执行完成后返回主策划审查</strong><small>关闭后，执行 Agent 返回结果即结束；开启后，Sol 会检查真实代码并决定通过或返工。</small></span></label>
+        <footer>
+          <span className="adopt-session-id">{draft.workdir.trim() || "Relay 托管工作目录"}</span>
+          <div className="dialog-save-actions">
+            <button className="secondary-button" onClick={onClose}>取消</button>
+            <button className="primary-button" disabled={busy || !draft.objective.trim()} onClick={onSubmit}><Plus size={16} />交给主策划</button>
+          </div>
+        </footer>
+      </section>
     </div>
   );
 }
@@ -734,7 +910,7 @@ function AdoptHahaDialog({
           <div><span className="eyebrow">Existing Session</span><h2 id="adopt-title">接管 Haha 项目对话</h2></div>
           <button className="icon-button" title="关闭" onClick={onClose}><X size={18} /></button>
         </header>
-        <p className="adopt-note">先让当前生成停止，再接管。Relay 会恢复原 sessionId，不会创建新对话。</p>
+        <p className="adopt-note">先让当前 Haha 生成停止。Relay 会在相同项目目录创建真实 Codex / Sol 对话完成审查，再恢复原 Haha sessionId 执行，不会新建 Haha 对话。</p>
         <div className="adopt-path-row">
           <label>
             <span>项目绝对路径</span>
@@ -758,7 +934,7 @@ function AdoptHahaDialog({
         </div>
         <div className="adopt-fields">
           <label><span>允许修改的文件</span><textarea value={allowedFiles} onChange={(event) => onAllowedFiles(event.target.value)} placeholder="每行一个相对路径；已自动填入当前 Git 改动" /></label>
-          <label><span>第一条纠偏指令</span><textarea value={instruction} onChange={(event) => onInstruction(event.target.value)} placeholder="例如：先检查现有实现，不要重写架构；修复状态同步和错误处理，然后运行指定测试。" /></label>
+          <label><span>交给 Sol 的接管目标</span><textarea value={instruction} onChange={(event) => onInstruction(event.target.value)} placeholder="例如：审查 Flash 当前实现和 Git diff，判断架构、状态同步与错误处理问题，再生成明确的纠偏指令。" /></label>
         </div>
         <footer>
           <span className="adopt-session-id" title={selectedSession?.title}>
@@ -766,7 +942,7 @@ function AdoptHahaDialog({
           </span>
           <div className="dialog-save-actions">
             <button className="secondary-button" onClick={onClose}>取消</button>
-            <button className="primary-button" disabled={busy || loading || !selectedId} onClick={onSubmit}><MessagesSquare size={16} />接管并发送</button>
+            <button className="primary-button" disabled={busy || loading || !selectedId} onClick={onSubmit}><MessagesSquare size={16} />交给 Sol 接管</button>
           </div>
         </footer>
       </section>
@@ -931,24 +1107,41 @@ function ConversationPane({ task, role }: { task: RelayTask; role: "planner" | "
     ? task.request.plannerModel
     : task.effectiveModel ?? task.requestedModel;
   const title = isPlanner
-    ? "A · 主策划"
+    ? "A · Codex / Sol 决策层"
     : task.sourceSessionTitle
       ? `B · ${task.sourceSessionTitle}`
       : "B · 执行";
   const detail = isPlanner
-    ? `${agent} · ${model}`
+    ? `${agent} · ${model}${task.plannerThreadId ? ` · thread ${task.plannerThreadId.slice(0, 8)}` : " · 等待创建真实对话"}`
     : `${agent} · ${model} · ${task.sessionId.slice(0, 8)}`;
+  const phaseLabel = isPlanner
+    ? task.workflowPhase === "planner-review"
+      ? "审查中"
+      : task.workflowPhase === "planner-verification"
+        ? "复审中"
+        : task.workflowPhase === "completed"
+          ? "验收完成"
+          : task.plannerThreadId
+            ? "已给出指令"
+            : "等待启动"
+    : task.workflowPhase === "planner-review"
+      ? "等待 Sol"
+      : task.workflowPhase === "planner-verification"
+        ? "等待复审"
+        : task.workflowPhase === "completed"
+          ? "执行完成"
+          : statusLabels[task.status];
   return (
     <section className={`conversation-pane conversation-${role}`}>
       <header>
         <span className="conversation-avatar">{isPlanner ? <Code2 size={16} /> : <Bot size={16} />}</span>
         <div><strong title={title}>{title}</strong><small>{detail}</small></div>
-        {!isPlanner && <StatusPill status={task.status} />}
+        <StatusPill status={task.status} label={phaseLabel} />
       </header>
       <div className="conversation-messages">
         {messages.length > 0 ? messages.map((message) => (
           <article className={`conversation-message message-${message.kind}`} key={message.id}>
-            <div><span>{message.kind === "follow-up" ? "返工指令" : message.kind === "error" ? "错误" : message.kind === "result" ? "最终回复" : message.kind === "output" ? "执行过程" : "任务指令"}</span><time>{formatTime(message.timestamp)}</time></div>
+            <div><span>{conversationMessageLabel(message.kind, isPlanner)}</span><time>{formatTime(message.timestamp)}</time></div>
             <p>{message.content}</p>
           </article>
         )) : (
@@ -961,7 +1154,7 @@ function ConversationPane({ task, role }: { task: RelayTask; role: "planner" | "
 
 function TaskRow({ task, selected, onSelect, onDelete }: { task: RelayTask; selected: boolean; onSelect: () => void; onDelete: () => void }) {
   const Icon = statusIcons[task.status];
-  const canDelete = task.status !== "queued" && task.status !== "running";
+  const canDelete = task.status === "completed" || task.status === "failed" || task.status === "cancelled";
   return (
     <div className={`task-row ${selected ? "selected" : ""}`} role="button" tabIndex={0} onClick={onSelect} onKeyDown={(event) => {
       if (event.key === "Enter" || event.key === " ") onSelect();
@@ -986,10 +1179,23 @@ function TaskRow({ task, selected, onSelect, onDelete }: { task: RelayTask; sele
   );
 }
 
-function StatusPill({ status }: { status: RelayTaskStatus }) {
+function StatusPill({ status, label }: { status: RelayTaskStatus; label?: string }) {
   const Icon = statusIcons[status];
-  return <span className={`status-pill status-${status}`}><Icon size={14} />{statusLabels[status]}</span>;
+  return <span className={`status-pill status-${status}`}><Icon size={14} />{label ?? statusLabels[status]}</span>;
 }
+
+const conversationMessageLabel = (kind: RelayTask["messages"][number]["kind"], isPlanner: boolean) => {
+  if (kind === "error") return "错误";
+  if (isPlanner) {
+    if (kind === "instruction") return "接管目标";
+    if (kind === "follow-up") return "给 Flash 的指令";
+    if (kind === "result") return "Sol 复审结论";
+    return "Sol 审查结论";
+  }
+  if (kind === "result") return "Flash 最终回复";
+  if (kind === "output") return "Haha 原对话 / 执行过程";
+  return kind === "follow-up" ? "返工指令" : "任务指令";
+};
 
 function Metric({ label, value, icon: Icon }: { label: string; value: string; icon: typeof Cpu }) {
   return <div className="metric"><Icon size={17} /><span><small>{label}</small><strong>{value}</strong></span></div>;

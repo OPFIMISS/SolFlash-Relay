@@ -1,6 +1,6 @@
 import { spawn, execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 import { promisify } from "node:util";
@@ -16,10 +16,12 @@ import type {
 } from "../shared/types.js";
 import { buildAgentRun } from "./agent-runner.js";
 import type { RelayConfig } from "./config.js";
+import { CodexPlanner, type PlannerRunner } from "./planner-runner.js";
 import { SettingsStore } from "./settings-store.js";
 import { TaskStore } from "./task-store.js";
 
 const execFileAsync = promisify(execFile);
+const maxPlannerRounds = 3;
 
 interface GitEntry {
   status: string;
@@ -62,6 +64,7 @@ const emptyUsage = (): RelayUsage => ({
 });
 
 const normalizePath = (value: string) => value.replaceAll("\\", "/");
+const safeName = (value: string) => value.replace(/[^\p{L}\p{N}._-]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "task";
 
 const asNumber = (value: unknown) =>
   typeof value === "number" && Number.isFinite(value) ? value : 0;
@@ -73,6 +76,7 @@ export class TaskManager {
     private readonly relayConfig: RelayConfig,
     private readonly store: TaskStore,
     private readonly settingsStore: SettingsStore,
+    private readonly planner: PlannerRunner = new CodexPlanner(),
   ) {}
 
   async start(request: RelayTaskRequest) {
@@ -112,6 +116,11 @@ export class TaskManager {
       usage: emptyUsage(),
       events: [],
       messages: [],
+      workflowMode: "direct",
+      workflowPhase: "executor-run",
+      plannerThreadId: null,
+      plannerRounds: 0,
+      plannerUsage: emptyUsage(),
     };
 
     await this.store.set(task);
@@ -121,21 +130,142 @@ export class TaskManager {
     return task;
   }
 
+  async startPlannerLed(request: RelayTaskRequest) {
+    const settings = this.settingsStore.get();
+    const title = request.title?.trim() || "未命名任务";
+    const workdir = request.workdir?.trim() || path.join(
+      this.relayConfig.dataDir,
+      "projects",
+      `${Date.now()}-${safeName(title)}`,
+    );
+    await mkdir(workdir, { recursive: true });
+    const normalized = await this.#validateRequest({
+      ...request,
+      title,
+      workdir,
+      allowedFiles: request.allowedFiles?.length ? request.allowedFiles : ["."],
+      plannerAgent: request.plannerAgent ?? settings.plannerAgent,
+      plannerModel: request.plannerModel ?? settings.plannerModel,
+      executorAgent: request.executorAgent ?? settings.executorAgent,
+      model: request.model ?? settings.executorModel,
+      effort: request.effort ?? settings.executorEffort,
+      reviewAfterExecution: request.reviewAfterExecution ?? true,
+    });
+    this.#requireExecutor(normalized.executorAgent ?? settings.executorAgent);
+    const now = new Date().toISOString();
+    const task: RelayTask = {
+      id: randomUUID(),
+      sessionId: randomUUID(),
+      request: normalized,
+      status: "waiting",
+      createdAt: now,
+      startedAt: null,
+      finishedAt: null,
+      updatedAt: now,
+      summary: "",
+      error: null,
+      changedFiles: [],
+      scopeWarnings: [],
+      projectName: path.basename(workdir),
+      requestedModel: normalized.model ?? settings.executorModel,
+      effectiveModel: null,
+      modelWarning: null,
+      unread: false,
+      usage: emptyUsage(),
+      events: [],
+      messages: [],
+      origin: "relay",
+      workflowMode: "planner-led",
+      workflowPhase: "planner-review",
+      plannerThreadId: null,
+      plannerRounds: 0,
+      plannerUsage: emptyUsage(),
+    };
+    await this.store.set(task);
+    await this.#message(task, "planner", "instruction", normalized.objective);
+    await this.#event(task, "task.created", `Planner-led task created in ${workdir}.`);
+    void this.#runPlannerTask(task, normalized.objective);
+    return task;
+  }
+
+  async #runPlannerTask(task: RelayTask, goal: string) {
+    try {
+      task.status = "waiting";
+      task.workflowPhase = "planner-review";
+      await this.store.set(task);
+      await this.#event(task, "task.planner-started", `Creating a visible planner conversation in ${task.request.workdir}.`);
+      const review = await this.planner.planTask(task, goal, async (threadId) => {
+        task.plannerThreadId = threadId;
+        await this.store.set(task);
+        await this.#event(task, "task.planner-started", `Created visible planner thread ${threadId}.`);
+      });
+      task.plannerThreadId = review.threadId;
+      task.plannerRounds = 1;
+      task.plannerUsage = mergeUsage(task.plannerUsage ?? emptyUsage(), review.usage);
+      await this.store.set(task);
+      await this.#message(task, "planner", "output", review.summary);
+      await this.#event(task, "task.planner-completed", `Planner completed framework and execution guidance in thread ${review.threadId}.`);
+      await this.#queueExecutor(task, review.instruction, false);
+    } catch (error) {
+      await this.#fail(task, error instanceof Error ? error.message : String(error), "planner");
+    }
+  }
+
   async send(taskId: string, instruction: string) {
     const task = this.#requireTask(taskId);
-    if (this.#processes.has(taskId)) {
+    return this.#queueExecutor(task, instruction, true);
+  }
+
+  async review(taskId: string, goal: string) {
+    const task = this.#requireTask(taskId);
+    if (task.workflowMode === "direct" || !task.plannerThreadId) {
+      throw new Error("This task has no persistent Codex planner conversation.");
+    }
+    if (this.#processes.has(task.id) || task.status === "running" || task.workflowPhase === "planner-review" || task.workflowPhase === "planner-verification") {
+      throw new Error("Wait for the current planner or executor turn to finish first.");
+    }
+    if (!goal.trim()) throw new Error("Planner guidance must not be empty.");
+    void this.#runPlannerGoal(task, goal.trim());
+    return task;
+  }
+
+  async #runPlannerGoal(task: RelayTask, goal: string) {
+    try {
+      task.status = "waiting";
+      task.workflowPhase = "planner-review";
+      task.finishedAt = null;
+      task.error = null;
+      task.unread = false;
+      await this.store.set(task);
+      await this.#message(task, "planner", "instruction", goal);
+      await this.#event(task, "task.planner-started", `User guidance was sent to Codex thread ${task.plannerThreadId}.`);
+      const review = await this.planner.continueReview(task, goal);
+      task.plannerRounds = (task.plannerRounds ?? 0) + 1;
+      task.plannerUsage = mergeUsage(task.plannerUsage ?? emptyUsage(), review.usage);
+      await this.store.set(task);
+      await this.#message(task, "planner", "output", review.summary);
+      await this.#event(task, "task.planner-completed", `Sol produced a new correction in Codex thread ${task.plannerThreadId}.`);
+      await this.#queueExecutor(task, review.instruction, true);
+    } catch (error) {
+      await this.#fail(task, error instanceof Error ? error.message : String(error), "planner");
+    }
+  }
+
+  async #queueExecutor(task: RelayTask, instruction: string, resume: boolean) {
+    if (this.#processes.has(task.id)) {
       throw new Error("The execution agent is already running for this task.");
     }
     if (!instruction.trim()) throw new Error("Instruction must not be empty.");
 
     task.status = "queued";
+    task.workflowPhase = "executor-run";
     task.finishedAt = null;
     task.error = null;
     task.unread = false;
     task.summary = "";
     await this.store.set(task);
     await this.#message(task, "planner", "follow-up", instruction.trim());
-    void this.#run(task, this.#buildFollowUpPrompt(task, instruction), true);
+    void this.#run(task, this.#buildFollowUpPrompt(task, instruction), resume);
     return task;
   }
 
@@ -145,9 +275,7 @@ export class TaskManager {
     }
     if (!instruction.trim()) throw new Error("A first correction instruction is required.");
     const settings = this.settingsStore.get();
-    const executorAgent = settings.agents.find((agent) =>
-      agent.enabled && agent.transport === "haha-sidecar" && agent.role !== "planner"
-    )?.id ?? settings.executorAgent;
+    const executorAgent = settings.executorAgent;
     this.#requireExecutor(executorAgent);
     const requestedModel = session.model && session.model !== "unknown"
       ? session.model
@@ -190,16 +318,45 @@ export class TaskManager {
       messages: [],
       origin: "adopted",
       sourceSessionTitle: session.title,
+      workflowMode: "planner-adoption",
+      workflowPhase: "planner-review",
+      plannerThreadId: null,
+      plannerRounds: 0,
+      plannerUsage: emptyUsage(),
     };
 
     await this.store.set(task);
-    await this.#message(task, "planner", "instruction", `已接管 Haha 会话 ${session.sessionId}。`);
+    await this.#message(task, "planner", "instruction", instruction.trim());
     if (session.lastResponse) await this.#message(task, "executor", "output", session.lastResponse);
     await this.#event(task, "task.created", `Adopted existing Haha session: ${session.title}`, {
       sessionId: session.sessionId,
       workdir: session.workdir,
     });
-    return this.send(task.id, instruction.trim());
+    void this.#runPlannerAdoption(task, session, instruction.trim());
+    return task;
+  }
+
+  async #runPlannerAdoption(task: RelayTask, session: HahaSessionSummary, goal: string) {
+    try {
+      task.status = "waiting";
+      task.workflowPhase = "planner-review";
+      await this.store.set(task);
+      await this.#event(task, "task.planner-started", `Codex / Sol is reviewing ${session.title} in ${task.request.workdir}.`);
+      const review = await this.planner.reviewAdoption(task, session, goal, async (threadId) => {
+        task.plannerThreadId = threadId;
+        await this.store.set(task);
+        await this.#event(task, "task.planner-started", `Created visible Codex planner thread ${threadId}.`);
+      });
+      task.plannerThreadId = review.threadId;
+      task.plannerRounds = 1;
+      task.plannerUsage = mergeUsage(task.plannerUsage ?? emptyUsage(), review.usage);
+      await this.store.set(task);
+      await this.#message(task, "planner", "output", review.summary);
+      await this.#event(task, "task.planner-completed", `Sol review completed in Codex thread ${review.threadId}.`);
+      await this.#queueExecutor(task, review.instruction, true);
+    } catch (error) {
+      await this.#fail(task, error instanceof Error ? error.message : String(error), "planner");
+    }
   }
 
   async cancel(taskId: string) {
@@ -215,8 +372,8 @@ export class TaskManager {
 
   async delete(taskId: string) {
     const task = this.#requireTask(taskId);
-    if (this.#processes.has(taskId) || task.status === "queued" || task.status === "running") {
-      throw new Error("Stop the running task before deleting it.");
+    if (this.#processes.has(taskId) || task.status === "queued" || task.status === "running" || task.status === "waiting") {
+      throw new Error("Wait for the active planner/executor turn to finish before deleting it.");
     }
     await this.store.delete(taskId);
     return taskId;
@@ -322,7 +479,7 @@ export class TaskManager {
         const changes = compareSnapshots(before, after);
         task.changedFiles = changes.changed;
         task.scopeWarnings = changes.changed.filter(
-          (file) => !changes.allowed.has(file),
+          (file) => !isAllowedPath(file, changes.allowed),
         );
 
         await this.store.set(task);
@@ -351,21 +508,55 @@ export class TaskManager {
           );
           return;
         }
-        task.status = "completed";
-        task.finishedAt = new Date().toISOString();
-        task.unread = true;
-        await this.store.set(task);
         await this.#message(task, "executor", "result", task.summary);
-        await this.#event(
-          task,
-          "task.completed",
-          task.summary || `${agent.label} process completed.`,
-        );
+        const requiresPlannerReview = task.workflowMode === "planner-adoption"
+          || (task.workflowMode === "planner-led" && task.request.reviewAfterExecution !== false);
+        if (requiresPlannerReview && task.plannerThreadId) {
+          await this.#runPlannerVerification(task);
+          return;
+        }
+        await this.#complete(task, task.summary || `${agent.label} process completed.`);
       })();
     });
 
     if (run.prompt !== null) child.stdin.write(run.prompt);
     child.stdin.end();
+  }
+
+  async #runPlannerVerification(task: RelayTask) {
+    try {
+      task.status = "waiting";
+      task.workflowPhase = "planner-verification";
+      await this.store.set(task);
+      await this.#event(task, "task.planner-started", `Codex / Sol is reviewing Flash's real code changes in thread ${task.plannerThreadId}.`);
+      const review = await this.planner.verifyImplementation(task);
+      task.plannerRounds = (task.plannerRounds ?? 0) + 1;
+      task.plannerUsage = mergeUsage(task.plannerUsage ?? emptyUsage(), review.usage);
+      await this.store.set(task);
+      await this.#message(task, "planner", "result", review.summary);
+      await this.#event(task, "task.planner-completed", `Sol verification returned ${review.verdict ?? "pass"}.`);
+
+      if (review.verdict === "revise") {
+        if ((task.plannerRounds ?? 0) >= maxPlannerRounds) {
+          await this.#fail(task, `Sol still found issues after ${task.plannerRounds} review rounds: ${review.summary}`, "planner");
+          return;
+        }
+        await this.#queueExecutor(task, review.instruction, true);
+        return;
+      }
+      await this.#complete(task, `Sol final review passed: ${review.summary}`);
+    } catch (error) {
+      await this.#fail(task, error instanceof Error ? error.message : String(error), "planner");
+    }
+  }
+
+  async #complete(task: RelayTask, message: string) {
+    task.status = "completed";
+    task.workflowPhase = "completed";
+    task.finishedAt = new Date().toISOString();
+    task.unread = true;
+    await this.store.set(task);
+    await this.#event(task, "task.completed", message);
   }
 
   async #handleAgentLine(task: RelayTask, line: string) {
@@ -489,13 +680,13 @@ export class TaskManager {
     });
   }
 
-  async #fail(task: RelayTask, message: string) {
+  async #fail(task: RelayTask, message: string, role: "planner" | "executor" = "executor") {
     task.status = "failed";
     task.error = message;
     task.finishedAt = new Date().toISOString();
     task.unread = true;
     await this.store.set(task);
-    await this.#message(task, "executor", "error", message);
+    await this.#message(task, role, "error", message);
     await this.#event(task, "task.failed", message);
   }
 
@@ -532,7 +723,7 @@ export class TaskManager {
       if (relative.startsWith("..") || path.isAbsolute(relative)) {
         throw new Error(`allowedFiles path escapes workdir: ${file}`);
       }
-      return normalizePath(relative);
+      return normalizePath(relative || ".");
     });
 
     return {
@@ -589,6 +780,15 @@ const readUsage = (payload: HahaJsonEvent, previous: RelayUsage): RelayUsage => 
     model,
   };
 };
+
+const mergeUsage = (previous: RelayUsage, next: RelayUsage): RelayUsage => ({
+  inputTokens: previous.inputTokens + next.inputTokens,
+  outputTokens: previous.outputTokens + next.outputTokens,
+  cacheReadTokens: previous.cacheReadTokens + next.cacheReadTokens,
+  cacheCreationTokens: previous.cacheCreationTokens + next.cacheCreationTokens,
+  costUsd: previous.costUsd + next.costUsd,
+  model: next.model ?? previous.model,
+});
 
 const readHahaError = (payload: HahaJsonEvent) => {
   if (typeof payload.error === "string") return payload.error;
@@ -674,6 +874,13 @@ const compareSnapshots = (before: GitSnapshot, after: GitSnapshot) => {
     }
   }
   return { changed: [...changed].sort(), allowed: after.allowed };
+};
+
+const isAllowedPath = (file: string, allowed: Set<string>) => {
+  for (const scope of allowed) {
+    if (scope === "." || file === scope || file.startsWith(`${scope}/`)) return true;
+  }
+  return false;
 };
 
 const terminateProcess = async (child: ReturnType<typeof spawn>) => {

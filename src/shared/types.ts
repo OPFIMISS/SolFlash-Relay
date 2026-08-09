@@ -14,6 +14,8 @@ export type RelayEventKind =
   | "task.completed"
   | "task.failed"
   | "task.cancelled"
+  | "task.planner-started"
+  | "task.planner-completed"
   | "task.model-warning"
   | "task.scope-warning";
 
@@ -48,6 +50,7 @@ export interface RelayTaskRequest {
   executorAgent?: string;
   model?: string;
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
+  reviewAfterExecution?: boolean;
 }
 
 export type AgentRole = "planner" | "executor" | "both";
@@ -121,6 +124,11 @@ export interface RelayTask {
   messages: AgentConversationMessage[];
   origin?: "relay" | "adopted";
   sourceSessionTitle?: string;
+  workflowMode?: "direct" | "planner-led" | "planner-adoption";
+  workflowPhase?: "planner-review" | "executor-run" | "planner-verification" | "completed";
+  plannerThreadId?: string | null;
+  plannerRounds?: number;
+  plannerUsage?: RelayUsage;
 }
 
 export interface HahaSessionSummary {

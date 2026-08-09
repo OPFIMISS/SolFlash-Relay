@@ -4,6 +4,7 @@ import type {
   HahaSessionSummary,
   RelaySettings,
   RelayTask,
+  RelayTaskRequest,
   TokenMonitorSummary,
 } from "../shared/types";
 
@@ -46,6 +47,12 @@ export const sendFollowUp = (taskId: string, instruction: string) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ instruction }),
   }).then(json<RelayTask>);
+export const sendPlannerFollowUp = (taskId: string, instruction: string) =>
+  fetch(`/api/tasks/${taskId}/planner-message`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ instruction }),
+  }).then(json<RelayTask>);
 export const markTaskRead = (taskId: string) =>
   fetch(`/api/tasks/${taskId}/read`, { method: "POST" }).then(json<RelayTask>);
 export const startVisibleFlashCheck = (workdir: string) =>
@@ -64,4 +71,10 @@ export const startVisibleFlashCheck = (workdir: string) =>
       model: "deepseek-v4-flash",
       effort: "low",
     }),
+  }).then(json<RelayTask>);
+export const startPlannerTask = (request: RelayTaskRequest) =>
+  fetch("/api/tasks/planner-led", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
   }).then(json<RelayTask>);

@@ -287,6 +287,20 @@ button { color: inherit; }
 .adopt-fields { display: grid; grid-template-columns: 0.8fr 1.2fr; gap: 10px; margin-top: 12px; }
 .adopt-fields textarea { min-height: 104px; resize: vertical; padding: 8px 9px; font: 11px/1.5 Consolas, monospace; }
 .adopt-session-id { min-width: 0; max-width: 52%; align-self: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-soft); font: 10px/1.4 Consolas, monospace; }
+.new-task-dialog { width: min(820px, 100%); max-height: min(900px, calc(100vh - 32px)); overflow: auto; }
+.new-task-main-fields { display: grid; grid-template-columns: 0.7fr 1.3fr; gap: 10px; }
+.new-task-main-fields label { min-width: 0; display: grid; gap: 6px; color: var(--text-soft); font-size: 10px; }
+.new-task-main-fields input, .new-task-main-fields textarea { width: 100%; padding: 8px 9px; border: 1px solid var(--border); border-radius: 7px; color: var(--text); background: var(--surface-raised); }
+.new-task-main-fields input { min-height: 40px; }
+.new-task-objective { grid-column: 1 / -1; }
+.new-task-objective textarea { min-height: 112px; resize: vertical; line-height: 1.5; }
+.new-task-scope-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.new-task-scope-fields textarea { min-height: 92px; }
+.review-toggle { display: flex; align-items: flex-start; gap: 9px; margin-top: 12px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); cursor: pointer; }
+.review-toggle input { width: 17px; height: 17px; margin-top: 1px; accent-color: var(--accent); }
+.review-toggle span { display: flex; flex-direction: column; gap: 3px; }
+.review-toggle strong { font-size: 11px; }
+.review-toggle small { color: var(--text-soft); font-size: 10px; line-height: 1.4; }
 
 @media (max-width: 1180px) {
   .dashboard-grid { grid-template-columns: minmax(220px, 0.7fr) minmax(450px, 1.5fr); }
@@ -300,7 +314,8 @@ button { color: inherit; }
   .agent-path { grid-column: 1 / -1; order: 3; }
   .dashboard-grid { grid-template-columns: 1fr; min-height: auto; }
   .queue-panel, .detail-panel, .insight-panel { min-height: auto; }
-  .adopt-path-row, .adopt-fields { grid-template-columns: 1fr; }
+  .adopt-path-row, .adopt-fields, .new-task-main-fields, .new-task-scope-fields { grid-template-columns: 1fr; }
+  .new-task-objective { grid-column: auto; }
   .adopt-path-row .secondary-button { width: 100%; }
   .task-list { max-height: 310px; }
   .insight-panel { grid-column: auto; display: grid; grid-template-columns: 1fr 1fr; }

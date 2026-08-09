@@ -35,6 +35,18 @@ export class TaskStore extends EventEmitter {
         task.unread ??= false;
         task.messages ??= migrateMessages(task);
         task.origin ??= "relay";
+        task.workflowMode ??= "direct";
+        task.workflowPhase ??= task.status === "completed" ? "completed" : "executor-run";
+        task.plannerThreadId ??= null;
+        task.plannerRounds ??= 0;
+        task.plannerUsage ??= {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreationTokens: 0,
+          costUsd: 0,
+          model: task.request.plannerModel ?? null,
+        };
         if (task.status === "running" || task.status === "waiting") {
           task.status = "failed";
           task.error = "Relay restarted while this task was active.";

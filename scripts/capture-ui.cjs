@@ -57,7 +57,11 @@ const task = {
     { id: "m2", role: "executor", agent: "claude-haha", model: "deepseek-v4-flash", timestamp: now, content: "Reading the existing selector and implementing the bounded states.", kind: "output" }
   ],
   origin: "adopted",
-  sourceSessionTitle: "修复帧计时并重测GC压力"
+  sourceSessionTitle: "修复帧计时并重测GC压力",
+  workflowMode: "planner-adoption",
+  workflowPhase: "executor-run",
+  plannerThreadId: "019fe7c7-19a0-78a1-98b3-1fa20a42b828",
+  plannerRounds: 1
 };
 
 const settings = {
@@ -74,7 +78,7 @@ const settings = {
 };
 
 const config = {
-  version: "0.6.2",
+  version: "0.6.4",
   host: "127.0.0.1",
   port: 17322,
   hahaRoot: "D:\\Claude Code Haha",
@@ -165,6 +169,16 @@ async function capture(browser, name, viewport) {
     await customModel.fill("luna-code-preview");
     if ((await customModel.inputValue()) !== "luna-code-preview") throw new Error("Custom intermediary model ID was not accepted");
     await page.getByTitle("关闭").click();
+    await page.getByTitle("新建主策划任务").click();
+    await page.waitForSelector(".new-task-dialog");
+    await page.locator(".new-task-objective textarea").fill("Build a small settings workflow with planner review.");
+    await page.waitForTimeout(350);
+    const newTaskDialogOverflow = await page.locator(".new-task-dialog").evaluate((element) =>
+      element.scrollWidth > element.clientWidth + 1,
+    );
+    if (newTaskDialogOverflow) throw new Error("New task dialog has horizontal overflow on desktop");
+    await page.screenshot({ path: path.join(".relay-data", "ui-new-task.png") });
+    await page.getByTitle("关闭").click();
     await page.getByTitle("接管已有 Haha 对话").click();
     await page.waitForSelector(".adopt-dialog");
     await page.waitForSelector(".adopt-session-list button.selected");
@@ -177,6 +191,15 @@ async function capture(browser, name, viewport) {
     await page.screenshot({ path: path.join(".relay-data", "ui-adopt-haha.png") });
     await page.getByTitle("关闭").click();
   } else if (name === "mobile") {
+    await page.getByTitle("新建主策划任务").click();
+    await page.waitForSelector(".new-task-dialog");
+    await page.waitForTimeout(350);
+    const newTaskDialogOverflow = await page.locator(".new-task-dialog").evaluate((element) =>
+      element.scrollWidth > element.clientWidth + 1,
+    );
+    if (newTaskDialogOverflow) throw new Error("New task dialog has horizontal overflow on mobile");
+    await page.screenshot({ path: path.join(".relay-data", "ui-new-task-mobile.png"), fullPage: true });
+    await page.getByTitle("关闭").click();
     await page.getByTitle("接管已有 Haha 对话").click();
     await page.waitForSelector(".adopt-dialog");
     await page.waitForSelector(".adopt-session-list button.selected");

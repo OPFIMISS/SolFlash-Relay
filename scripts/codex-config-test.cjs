@@ -12,8 +12,14 @@ const { pathToFileURL } = require("node:url");
     'model = "gpt-5.6-sol"',
     "",
     "# BEGIN sol-flash-relay",
-    "obsolete = true",
-    "# END sol-flash-relay",
+    "[mcp_servers.sol_flash_relay]",
+    'command = "C:\\\\Stale\\\\Relay.exe"',
+    "",
+    "[projects.'c:\\\\preserved-project']",
+    'trust_level = "trusted"',
+    "",
+    "[mcp_servers.sol_flash_relay.env]",
+    'ELECTRON_RUN_AS_NODE = "1"',
     "",
     "[another_setting]",
     "enabled = true",
@@ -23,6 +29,12 @@ const { pathToFileURL } = require("node:url");
 
   if (!merged.includes('model = "gpt-5.6-sol"') || !merged.includes("[another_setting]")) {
     throw new Error("MCP installation did not preserve unrelated Codex configuration");
+  }
+  if (!merged.includes("[projects.'c:\\\\preserved-project']")) {
+    throw new Error("Repairing an orphan Relay block removed an unrelated Codex project section");
+  }
+  if (merged.includes('command = "C:\\\\Stale\\\\Relay.exe"')) {
+    throw new Error("Stale orphan Relay sections were not removed");
   }
   if ((merged.match(/# BEGIN sol-flash-relay/g) ?? []).length !== 1) {
     throw new Error("MCP managed block replacement is not idempotent");

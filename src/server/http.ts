@@ -110,10 +110,30 @@ export const startHttpServer = (
       });
     }
   });
+  app.post("/api/tasks/planner-led", async (request, response) => {
+    try {
+      response.status(202).json(await manager.startPlannerLed(request.body as RelayTaskRequest));
+    } catch (error) {
+      response.status(400).json({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
   app.post("/api/tasks/:id/message", async (request, response) => {
     try {
       response.status(202).json(
         await manager.send(request.params.id, String(request.body?.instruction ?? "")),
+      );
+    } catch (error) {
+      response.status(400).json({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+  app.post("/api/tasks/:id/planner-message", async (request, response) => {
+    try {
+      response.status(202).json(
+        await manager.review(request.params.id, String(request.body?.instruction ?? "")),
       );
     } catch (error) {
       response.status(400).json({
