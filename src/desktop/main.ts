@@ -1,4 +1,5 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, shell, Tray } from "electron";
+import { spawn } from "node:child_process";
 import http from "node:http";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -12,8 +13,10 @@ import { disableTokenMonitorClaudePolling, inspectTokenMonitorCompatibility } fr
 const relayUrl = `http://${process.env.RELAY_HOST ?? "127.0.0.1"}:${process.env.RELAY_PORT ?? "17322"}`;
 const backgroundMode = process.argv.includes("--background");
 const mcpMode = process.argv.includes("--mcp");
+const quitForUpdateMode = process.argv.includes("--quit-for-update");
 
 app.setName("SolFlash Relay");
+if (process.platform === "win32") app.setAppUserModelId("com.solflash.relay");
 app.setPath(
   "userData",
   process.env.RELAY_USER_DATA_DIR || path.join(app.getPath("appData"), "SolFlash Relay"),
@@ -30,24 +33,46 @@ let eventRequest: ReturnType<typeof http.get> | null = null;
 let eventPollTimer: NodeJS.Timeout | null = null;
 
 console.error(`[desktop] bootstrap background=${backgroundMode} mcp=${mcpMode}`);
-const hasSingleInstanceLock = mcpMode || app.requestSingleInstanceLock();
-console.error(`[desktop] single-instance=${hasSingleInstanceLock}`);
-if (!hasSingleInstanceLock) {
-  app.quit();
-  process.exit(0);
-} else if (!mcpMode) {
-  app.on("second-instance", (_event, commandLine) => {
-    if (commandLine.includes("--background")) return;
-    void showWindow();
-  });
+if (quitForUpdateMode) {
+  stopPackagedInstancesForUpdate();
+} else {
+  const hasSingleInstanceLock = mcpMode || app.requestSingleInstanceLock();
+  console.error(`[desktop] single-instance=${hasSingleInstanceLock}`);
+  if (!hasSingleInstanceLock) {
+    app.quit();
+    process.exit(0);
+  } else {
+    if (!mcpMode) {
+      app.on("second-instance", (_event, commandLine) => {
+        if (commandLine.includes("--background")) return;
+        void showWindow();
+      });
+    }
+    void bootstrap().catch((error) => {
+      const message = error instanceof Error ? error.stack ?? error.message : String(error);
+      console.error(`[desktop] fatal\n${message}`);
+      if (app.isReady()) dialog.showErrorBox("SolFlash Relay 启动失败", message);
+      app.exit(1);
+    });
+  }
 }
 
-void bootstrap().catch((error) => {
-  const message = error instanceof Error ? error.stack ?? error.message : String(error);
-  console.error(`[desktop] fatal\n${message}`);
-  if (app.isReady()) dialog.showErrorBox("SolFlash Relay 启动失败", message);
-  app.exit(1);
-});
+function stopPackagedInstancesForUpdate() {
+  const executableName = path.basename(process.execPath);
+  if (process.platform === "win32" && executableName.toLowerCase() === "solflash relay.exe") {
+    const taskkill = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe");
+    const killer = spawn(taskkill, ["/F", "/T", "/IM", executableName], {
+      detached: true,
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    killer.once("error", () => app.exit(1));
+    killer.unref();
+    setTimeout(() => app.exit(0), 2000);
+    return;
+  }
+  app.exit(0);
+}
 
 async function bootstrap() {
   await app.whenReady();
@@ -64,10 +89,10 @@ async function bootstrap() {
   createTray();
   createApplicationMenu();
   registerIpc();
+  await showWindow(undefined, backgroundMode);
   await syncUnreadTasks(false);
   connectTaskEvents();
   eventPollTimer = setInterval(() => void syncUnreadTasks(true), 1000);
-  if (!backgroundMode) await showWindow();
 
   app.on("activate", () => void showWindow());
   app.on("window-all-closed", () => {
@@ -111,8 +136,14 @@ async function ensureRelay() {
   runtime = await module.startRelayRuntime();
 }
 
-async function showWindow(taskId?: string) {
+async function showWindow(taskId?: string, startMinimized = false) {
   if (mainWindow && !mainWindow.isDestroyed()) {
+    if (startMinimized) {
+      mainWindow.showInactive();
+      mainWindow.minimize();
+      return;
+    }
+    if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
     if (taskId) mainWindow.webContents.send("relay:focus-task", taskId);
@@ -125,6 +156,7 @@ async function showWindow(taskId?: string) {
     minWidth: 980,
     minHeight: 680,
     show: false,
+    skipTaskbar: false,
     backgroundColor: "#f3f3ef",
     autoHideMenuBar: true,
     icon: iconPath(),
@@ -146,17 +178,26 @@ async function showWindow(taskId?: string) {
   mainWindow.on("close", (event) => {
     if (quitting) return;
     event.preventDefault();
-    mainWindow?.hide();
+    mainWindow?.minimize();
+  });
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+    if (!quitting) setTimeout(() => void showWindow(undefined, true), 0);
   });
   mainWindow.on("focus", () => void clearUnreadTasks());
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.once("ready-to-show", () => {
+    mainWindow?.show();
+    if (startMinimized) mainWindow?.minimize();
+  });
   await mainWindow.loadURL(relayUrl);
   updateOverlayIcon();
   if (taskId) mainWindow.webContents.send("relay:focus-task", taskId);
 }
 
 function createTray() {
+  if (tray && !tray.isDestroyed()) return;
   const image = nativeImage.createFromPath(iconPath()).resize({ width: 20, height: 20 });
+  if (image.isEmpty()) throw new Error(`无法加载托盘图标：${iconPath()}`);
   tray = new Tray(image);
   tray.setToolTip("SolFlash Relay");
   tray.setContextMenu(Menu.buildFromTemplate([
@@ -172,7 +213,7 @@ function createApplicationMenu() {
     {
       label: "应用",
       submenu: [
-        { label: "隐藏到后台", accelerator: "CmdOrCtrl+W", click: () => mainWindow?.hide() },
+        { label: "最小化到任务栏", accelerator: "CmdOrCtrl+W", click: () => mainWindow?.minimize() },
         { label: "退出", accelerator: "CmdOrCtrl+Q", click: () => void shutdownAndQuit() },
       ],
     },
@@ -211,6 +252,10 @@ async function getDesktopStatus() {
   }
   return {
     hosted: true,
+    trayReady: Boolean(tray && !tray.isDestroyed()),
+    taskbarReady: Boolean(mainWindow && !mainWindow.isDestroyed()),
+    windowVisible: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()),
+    windowMinimized: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isMinimized()),
     packaged: app.isPackaged,
     portable,
     canInstallMcp: app.isPackaged && !portable,
@@ -252,6 +297,9 @@ async function installMcpConfig() {
 async function shutdownAndQuit() {
   if (quitting) return;
   quitting = true;
+  const window = mainWindow;
+  mainWindow = null;
+  if (window && !window.isDestroyed()) window.destroy();
   tray?.destroy();
   tray = null;
   try {
@@ -263,7 +311,7 @@ async function shutdownAndQuit() {
   } catch (error) {
     dialog.showErrorBox("Relay 退出错误", error instanceof Error ? error.message : String(error));
   }
-  app.quit();
+  app.exit(0);
 }
 
 function connectTaskEvents() {
@@ -313,6 +361,7 @@ function handleTaskEvent(task: RelayTask) {
 
 async function syncUnreadTasks(notify: boolean) {
   try {
+    createTray();
     const tasks = await fetch(`${relayUrl}/api/tasks`).then((response) => response.json()) as RelayTask[];
     const currentUnread = new Set(
       tasks.filter((task) => task.unread && ["completed", "failed"].includes(task.status)).map((task) => task.id),

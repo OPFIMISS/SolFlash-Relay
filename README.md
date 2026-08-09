@@ -2,7 +2,7 @@
 
 **中文** | [English](#english)
 
-当前版本 / Current version: `0.6.1`<br>
+当前版本 / Current version: `0.6.2`<br>
 Windows 10/11 · MIT License · Local-first · MCP
 
 SolFlash Relay 是一个本地多 Agent 编程控制面：让 Codex / Sol 负责规划、架构、UI 与最终审查，再把边界明确的代码实现交给 Claude Code Haha / DeepSeek Flash 或其他执行 Agent。
@@ -19,18 +19,19 @@ SolFlash Relay 是一个本地多 Agent 编程控制面：让 Codex / Sol 负责
 - **保留原生 Agent 体验**：Haha 任务使用与 Codex 相同的绝对项目路径，并保留在 Haha 的可见项目会话中。
 - **A 自动收到 B 的结果**：`agent_run` 会等待执行 Agent 的最终回复并直接返回给策划 Agent；异步任务仍可使用 `agent_start`、`flash_wait` 和 `flash_send`。
 - **一个任务，两段对话**：工作台按项目路径聚合任务，上方显示 A 的初始指令与返工，下方显示 B 的过程和最终回复。
-- **后台托管与通知**：关闭窗口后继续在托盘运行；任务完成或失败时发送 Windows 通知，并显示任务栏未读 `1` 角标。
+- **后台托管与通知**：关闭窗口后最小化并保留任务栏与托盘入口；任务完成或失败时发送 Windows 通知，并显示任务栏未读 `1` 角标。
 - **模型可核验**：同时记录请求模型、Haha CLI 实际接收的模型别名和 Provider 回报的有效模型；空回复不再被误判为完成。
 - **费用与 Token**：显示输入、输出、缓存读取、缓存写入、成本、缓存节省率、命中率，以及 Token Monitor 提供的余额或额度。
 - **自由切换 Agent**：内置 Codex、Claude Code Haha、Claude Code CLI、OpenCode、Reasonix 适配器，并支持无凭据的自定义 CLI 描述。
 - **中途接管已有 Haha 对话**：按项目绝对路径扫描原生 Haha 会话，复用原 `sessionId` 发送 Sol 的纠偏指令，不创建新对话。
 - **阻止 `/usage` 对话污染**：检测 Token Monitor 的 Claude 额度轮询，备份配置后可一键关闭，同时保留其他 Provider 和历史数据。
 
-## 0.6.1 重点更新
+## 0.6.2 重点更新
 
-- 修复大型 Haha 会话只扫描到部分对话的问题：以原始 `session-meta.workDir` 判断项目归属，不会因为会话后期进入子目录而漏掉。
-- 接管列表、任务标题和 B 对话栏使用 Haha 的真实 `ai-title`；无 AI 标题时使用第一条真实用户提示，并过滤内部 `<task-notification>`。
-- B 对话栏同时显示原会话短 `sessionId`，同项目内多个对话可以准确区分。
+- 后台托管始终保留可见入口：关闭主窗口会最小化到任务栏，不再进入“无窗口、无托盘但进程仍运行”的状态。
+- 由 MCP 自动启动后台宿主时，也会创建最小化窗口并维持托盘图标；托盘对象异常丢失时会自动重建。
+- Setup 安装和卸载前会先请求旧实例退出，再清理残留的主进程、GPU/网络子进程和 MCP 进程，避免升级时反复提示程序未关闭。
+- 保留 `0.6.1` 的完整 Haha 会话扫描、原生标题识别、内部任务通知过滤和短 `sessionId` 区分。
 - 自动排除 Token Monitor 产生的 `Unknown skill: usage` 探测会话，不让它们出现在可接管列表中。
 - 新增 Token Monitor 兼容性检测与一键修复：仅从 `limitProviders` 移除 `claude`，修改前自动备份配置。
 - 保留同步 `agent_run`、可见 Flash 自检、Windows 通知、任务栏未读角标和 A/B 双对话工作台。
@@ -71,8 +72,8 @@ flowchart LR
 
 推荐从 [Releases](https://github.com/OPFIMISS/SolFlash-Relay/releases) 下载：
 
-- `SolFlash-Relay-0.6.1-x64-setup.exe`：推荐版本，支持后台托管和一键安装 Codex MCP。
-- `SolFlash-Relay-0.6.1-x64-portable.exe`：便携控制台与后台宿主；由于便携外壳不能稳定转发 MCP stdio，不提供一键 MCP 安装。
+- `SolFlash-Relay-0.6.2-x64-setup.exe`：推荐版本，支持后台托管和一键安装 Codex MCP。
+- `SolFlash-Relay-0.6.2-x64-portable.exe`：便携控制台与后台宿主；由于便携外壳不能稳定转发 MCP stdio，不提供一键 MCP 安装。
 
 安装版使用步骤：
 
@@ -82,7 +83,7 @@ flowchart LR
 4. 点击“复制使用指令”，在需要作为策划端的 Codex 项目中粘贴并描述任务。
 5. 首次使用可在已有项目任务上点击“验证当前项目的 Flash”，它会产生一次很小的真实模型调用。
 
-关闭窗口只会隐藏到托盘。要彻底停止 Relay，请使用托盘菜单“退出”或设置页电源按钮。
+关闭窗口会最小化到任务栏并继续后台托管。要彻底停止 Relay，请使用托盘菜单“退出”或设置页电源按钮。
 
 ## 五分钟使用教程
 
@@ -92,15 +93,15 @@ flowchart LR
 
 1. 已安装 Claude Code Haha，并在 Haha 内配置好 Provider / API。
 2. 在 Haha 中手动新建一次普通会话，确认目标模型可以正常回复。
-3. 下载的是 `SolFlash-Relay-0.6.1-x64-setup.exe`，不是 Portable 便携版。
+3. 下载的是 `SolFlash-Relay-0.6.2-x64-setup.exe`，不是 Portable 便携版。
 
-> **Codex MCP 安装仅支持 Setup 版本。** Portable 只提供面板与后台托管；切换到 Setup 前，请先从托盘退出 Portable。
+> **Codex MCP 安装仅支持 Setup 版本。** Portable 只提供面板与后台托管；切换到 Setup 前，请先从任务栏或托盘退出 Portable。
 
 ### 1. 安装并启动 Setup 版本
 
-从 [GitHub Releases](https://github.com/OPFIMISS/SolFlash-Relay/releases/latest) 下载 `SolFlash-Relay-0.6.1-x64-setup.exe`，完成安装后启动 SolFlash Relay。
+从 [GitHub Releases](https://github.com/OPFIMISS/SolFlash-Relay/releases/latest) 下载 `SolFlash-Relay-0.6.2-x64-setup.exe`，完成安装后启动 SolFlash Relay。
 
-看到顶部“Relay 后台托管已开启”说明本地服务已经运行。关闭窗口后它仍会留在 Windows 托盘中。
+看到顶部“Relay 后台托管已开启”说明本地服务已经运行。关闭窗口后它会最小化，并同时保留 Windows 任务栏和托盘入口。
 
 ### 2. 选择上级和下级 Agent
 
@@ -187,7 +188,7 @@ Flash 完成后，Sol 仍然负责最终质量。让 Codex 检查真实 diff、�
 | --- | --- |
 | 点击“安装 Codex MCP”提示便携版不支持 | 退出 Portable，安装并运行 Setup EXE |
 | Codex 中没有 Relay 工具或任务不出现 | 重新点击安装 MCP，然后彻底退出并重启 Codex |
-| Relay 显示旧设置或旧任务 | 从托盘退出所有旧版 Relay，只保留最新安装版 |
+| Relay 显示旧设置或旧任务 | 从任务栏或托盘退出所有旧版 Relay，只保留最新安装版 |
 | Haha 显示 Pro | 检查 Relay 任务里的“请求模型/实际模型”，不要只看当前选中的 Haha 会话 |
 | Haha 出现 `Unknown skill: usage` | 在 Relay 的“连接”区域点击“一键修复”，然后退出并重启 Token Monitor |
 | Token Monitor 显示 `fetch failed` | 不影响任务执行；Token Monitor 是可选的只读统计组件 |
@@ -199,7 +200,7 @@ Haha 输入框底部显示的是**当前所选 Haha 会话**的模型。Relay �
 
 如果 Haha 中出现大量名为 `Unknown skill: usage` 的会话，它们不是 Relay 创建的任务。Token Monitor `0.42.1` 在 Windows 上可能每 5 分钟执行一次 `claude /usage`；Haha 不认识该命令时会把探测保存为新对话，并继承全局默认模型，因此可能显示 Pro 且没有模型回复。
 
-Relay `0.6.1` 会检查 `%APPDATA%\Token Monitor\settings.json`。检测到风险时，“连接”区域会显示红色警告和“一键修复”：修复前自动创建 `.solflash-backup-*` 备份，只从 `limitProviders` 移除 `claude`，不会修改其他 Provider、凭据、用量历史或已有 Haha 对话。修复后退出并重启 Token Monitor 使正在运行的实例立即应用。
+Relay `0.6.2` 会检查 `%APPDATA%\Token Monitor\settings.json`。检测到风险时，“连接”区域会显示红色警告和“一键修复”：修复前自动创建 `.solflash-backup-*` 备份，只从 `limitProviders` 移除 `claude`，不会修改其他 Provider、凭据、用量历史或已有 Haha 对话。修复后退出并重启 Token Monitor 使正在运行的实例立即应用。
 
 ![Token Monitor Claude 轮询风险与一键修复](docs/images/token-monitor-repair.png)
 
@@ -268,7 +269,9 @@ Relay does not proxy model APIs or own provider credentials. Every Agent keeps i
 - Requested model, Haha CLI alias, and provider-reported effective model are recorded separately. Missing or empty replies fail explicitly.
 - Built-in profiles cover Codex, Claude Code Haha, Claude Code CLI, OpenCode, and Reasonix, plus credential-free custom CLI adapters.
 - Existing Haha conversations can be adopted by exact project path and resumed with the original `sessionId` for Sol-directed corrections.
-- Version `0.6.1` reads the canonical project path from Haha session metadata, so sessions are not lost when later messages run in a project subdirectory.
+- Version `0.6.2` keeps both a taskbar entry and a tray icon while hosted in the background. Closing the main window minimizes it instead of making the process unreachable.
+- Setup and uninstall now deterministically stop Relay and MCP process trees before replacing files.
+- Since `0.6.1`, Relay reads the canonical project path from Haha session metadata, so sessions are not lost when later messages run in a project subdirectory.
 - Adopted task and executor conversation titles match Haha's native AI title, with a short `sessionId` shown for unambiguous identification; internal task notifications are excluded.
 - Token Monitor integration adds cache savings, hit rate, cost, and provider balance/quota, while detecting the incompatible Claude `/usage` polling behavior.
 
@@ -276,15 +279,15 @@ Relay does not proxy model APIs or own provider credentials. Every Agent keeps i
 
 Download the recommended Setup build from [GitHub Releases](https://github.com/OPFIMISS/SolFlash-Relay/releases):
 
-- `SolFlash-Relay-0.6.1-x64-setup.exe`: desktop host, tray mode, and one-click Codex MCP installation.
-- `SolFlash-Relay-0.6.1-x64-portable.exe`: portable dashboard and background host; MCP stdio installation requires the Setup build.
+- `SolFlash-Relay-0.6.2-x64-setup.exe`: desktop host, tray mode, and one-click Codex MCP installation.
+- `SolFlash-Relay-0.6.2-x64-portable.exe`: portable dashboard and background host; MCP stdio installation requires the Setup build.
 
 Open Agent settings, select the planner/executor profiles and models, install Codex MCP, restart Codex, then paste the copied Relay instruction into the Codex project that should act as planner.
 
 ### Five-minute quick start
 
 1. Configure Haha's provider/API first and verify that Haha can answer a normal message.
-2. Install `SolFlash-Relay-0.6.1-x64-setup.exe`. The Portable build cannot install Codex MCP; exit it from the tray before using Setup.
+2. Install `SolFlash-Relay-0.6.2-x64-setup.exe`. The Portable build cannot install Codex MCP; exit it from the taskbar or tray before using Setup.
 3. In Relay settings, choose `Codex / gpt-5.6-sol` as planner and `Claude Code Haha / deepseek-v4-flash` as executor. Start with medium effort to reduce cost.
 4. Click **Install Codex MCP**, then fully quit and restart Codex.
 5. Open the real target project in Codex, click **Copy usage instruction** in Relay, and paste it before your implementation request.
@@ -316,7 +319,7 @@ Claude Code Haha deepseek-v4-flash. Review the real Git diff and tests after it 
 Task: add a loading state to the settings save button to prevent duplicate submissions.
 ```
 
-If Codex does not expose the Relay tools after installation, reinstall MCP and fully restart Codex. If Relay appears to show old settings, exit every older Relay instance from the Windows tray and keep only the latest Setup build running.
+If Codex does not expose the Relay tools after installation, reinstall MCP and fully restart Codex. If Relay appears to show old settings, exit every older Relay instance from the Windows taskbar or tray and keep only the latest Setup build running.
 
 ### Flash verification
 
@@ -324,7 +327,7 @@ The **Verify Flash for current project** action makes a small real provider call
 
 If Haha contains many `Unknown skill: usage` sessions, those are created by Token Monitor `0.42.1` `/usage` probes rather than Relay. On Windows the probe may run every five minutes, inherit Haha's global default model, and create a Pro-labelled session without a model reply.
 
-Relay `0.6.1` detects this configuration and displays a repair action. The repair creates a `.solflash-backup-*` copy and removes only `claude` from Token Monitor's `limitProviders`; it preserves every other provider, credentials, usage history, and existing Haha conversation. Restart Token Monitor after repair so the running instance applies the change.
+Relay `0.6.2` detects this configuration and displays a repair action. The repair creates a `.solflash-backup-*` copy and removes only `claude` from Token Monitor's `limitProviders`; it preserves every other provider, credentials, usage history, and existing Haha conversation. Restart Token Monitor after repair so the running instance applies the change.
 
 ### Development and security
 

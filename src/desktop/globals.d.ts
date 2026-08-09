@@ -6,6 +6,10 @@ declare global {
       installMcp: () => Promise<string>;
       getStatus: () => Promise<{
         hosted: boolean;
+        trayReady: boolean;
+        taskbarReady: boolean;
+        windowVisible: boolean;
+        windowMinimized: boolean;
         packaged: boolean;
         portable: boolean;
         canInstallMcp: boolean;

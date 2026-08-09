@@ -74,7 +74,7 @@ const settings = {
 };
 
 const config = {
-  version: "0.6.1",
+  version: "0.6.2",
   host: "127.0.0.1",
   port: 17322,
   hahaRoot: "D:\\Claude Code Haha",

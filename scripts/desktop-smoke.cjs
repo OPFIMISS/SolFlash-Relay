@@ -145,13 +145,21 @@ const path = require("node:path");
     if (minimumSize.horizontalOverflow) throw new Error("Minimum desktop window has horizontal overflow");
     await window.screenshot({ path: path.join(".relay-data", "desktop-minimum.png"), fullPage: true });
 
-    await window.evaluate(() => window.close());
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
     await new Promise((resolve) => setTimeout(resolve, 500));
-    const background = await electronApp.evaluate(({ BrowserWindow }) => {
+    const background = await electronApp.evaluate(async ({ BrowserWindow }) => {
       const windows = BrowserWindow.getAllWindows();
-      return { windows: windows.length, visible: windows.some((item) => item.isVisible()) };
+      const target = windows[0];
+      return {
+        windows: windows.length,
+        visible: windows.some((item) => item.isVisible()),
+        minimized: Boolean(target?.isMinimized()),
+        status: target ? await target.webContents.executeJavaScript("window.relayDesktop.getStatus()") : null,
+      };
     });
-    if (background.visible) throw new Error("Closing the desktop window did not hide it to the background");
+    if (background.windows !== 1 || !background.minimized || !background.status?.trayReady || !background.status?.taskbarReady) {
+      throw new Error(`Background entry points are not visible: ${JSON.stringify(background)}`);
+    }
     phase("background hosting verified");
 
     console.log(JSON.stringify({ ok: true, audit, notificationAudit, minimumSize, background }));
