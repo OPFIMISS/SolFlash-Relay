@@ -130,6 +130,16 @@ export const startHttpServer = (
       });
     }
   });
+  app.delete("/api/tasks/:id", async (request, response) => {
+    try {
+      const id = await manager.delete(request.params.id);
+      response.json({ id });
+    } catch (error) {
+      response.status(400).json({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
   app.post("/api/tasks/:id/read", async (request, response) => {
     const task = manager.get(request.params.id);
     if (!task) return response.status(404).json({ error: "Task not found" });
@@ -152,11 +162,16 @@ export const startHttpServer = (
     const onTask = (task: unknown) => {
       response.write(`event: task\ndata: ${JSON.stringify(task)}\n\n`);
     };
+    const onTaskDeleted = (taskId: string) => {
+      response.write(`event: task-deleted\ndata: ${JSON.stringify({ taskId })}\n\n`);
+    };
     const keepAlive = setInterval(() => response.write(": keep-alive\n\n"), 15000);
     store.on("task", onTask);
+    store.on("task-deleted", onTaskDeleted);
     request.on("close", () => {
       clearInterval(keepAlive);
       store.off("task", onTask);
+      store.off("task-deleted", onTaskDeleted);
     });
   });
 

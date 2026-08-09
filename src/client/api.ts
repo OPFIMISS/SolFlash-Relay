@@ -38,6 +38,8 @@ export const getTokenMonitor = (period = "today") =>
   );
 export const cancelTask = (taskId: string) =>
   fetch(`/api/tasks/${taskId}/cancel`, { method: "POST" }).then(json<RelayTask>);
+export const deleteTask = (taskId: string) =>
+  fetch(`/api/tasks/${taskId}`, { method: "DELETE" }).then(json<{ id: string }>);
 export const sendFollowUp = (taskId: string, instruction: string) =>
   fetch(`/api/tasks/${taskId}/message`, {
     method: "POST",

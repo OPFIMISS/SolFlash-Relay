@@ -5,7 +5,7 @@ import os from "node:os";
 
 import type { RelayConfigView } from "../shared/types.js";
 
-export const relayVersion = "0.6.2";
+export const relayVersion = "0.6.3";
 
 const parsePort = (value: string | undefined, fallback: number) => {
   const parsed = Number(value);

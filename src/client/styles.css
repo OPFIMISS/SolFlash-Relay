@@ -103,6 +103,8 @@ button { color: inherit; }
 .task-row:hover { background: var(--surface-muted); }
 .task-row.selected { border-color: color-mix(in srgb, var(--accent) 38%, var(--border)); background: var(--accent-soft); }
 .task-status-icon { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; color: var(--text-soft); background: var(--surface-raised); }
+.task-delete { padding: 0; border: 0; cursor: pointer; transition: transform 160ms ease, background 160ms ease; }
+.task-delete:hover { transform: scale(1.08); background: color-mix(in srgb, var(--danger) 12%, var(--surface-raised)); }
 .status-running { color: var(--accent); }
 .status-completed { color: var(--accent); }
 .status-failed, .status-cancelled { color: var(--danger); }

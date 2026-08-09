@@ -213,6 +213,15 @@ export class TaskManager {
     return task;
   }
 
+  async delete(taskId: string) {
+    const task = this.#requireTask(taskId);
+    if (this.#processes.has(taskId) || task.status === "queued" || task.status === "running") {
+      throw new Error("Stop the running task before deleting it.");
+    }
+    await this.store.delete(taskId);
+    return taskId;
+  }
+
   get(taskId: string) {
     return this.store.get(taskId);
   }

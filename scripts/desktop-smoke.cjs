@@ -136,6 +136,16 @@ const path = require("node:path");
     }
     phase("notification flow verified");
 
+    await window.getByRole("button", { name: "删除 Notification smoke test" }).click();
+    await window.waitForFunction(async (taskId) => {
+      const response = await fetch(`/api/tasks/${taskId}`);
+      return response.status === 404;
+    }, notifyTaskId, { timeout: 5000 });
+    if (await window.getByText("Notification smoke test", { exact: true }).count()) {
+      throw new Error("Deleted task is still visible in the task list");
+    }
+    phase("task deletion verified");
+
     await window.setViewportSize({ width: 980, height: 680 });
     const minimumSize = await window.evaluate(() => ({
       viewportWidth: window.innerWidth,

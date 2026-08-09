@@ -56,6 +56,7 @@ import type {
 } from "../shared/types";
 import {
   cancelTask,
+  deleteTask,
   getConfig,
   getHahaSessions,
   getSettings,
@@ -182,6 +183,11 @@ export function App() {
       );
       setSelectedId((current) => current ?? task.id);
     });
+    events.addEventListener("task-deleted", (event) => {
+      const { taskId } = JSON.parse((event as MessageEvent).data) as { taskId: string };
+      setTasks((current) => current.filter((task) => task.id !== taskId));
+      setSelectedId((current) => current === taskId ? null : current);
+    });
     return () => {
       window.clearInterval(timer);
       events.close();
@@ -243,6 +249,19 @@ export function App() {
     try {
       const next = await cancelTask(selected.id);
       setTasks((current) => [next, ...current.filter((task) => task.id !== next.id)]);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeTask = async (taskId: string) => {
+    setBusy(true);
+    try {
+      await deleteTask(taskId);
+      setTasks((current) => current.filter((task) => task.id !== taskId));
+      setSelectedId((current) => current === taskId ? null : current);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
@@ -479,6 +498,7 @@ export function App() {
                   tasks={group}
                   selectedId={selected?.id ?? null}
                   onSelect={setSelectedId}
+                  onDelete={(taskId) => void removeTask(taskId)}
                 />
               ))
             )}
@@ -874,10 +894,12 @@ function ProjectGroup({
   tasks,
   selectedId,
   onSelect,
+  onDelete,
 }: {
   tasks: RelayTask[];
   selectedId: string | null;
   onSelect: (taskId: string) => void;
+  onDelete: (taskId: string) => void;
 }) {
   const project = tasks[0];
   const unread = tasks.filter((task) => task.unread).length;
@@ -894,6 +916,7 @@ function ProjectGroup({
           task={task}
           selected={task.id === selectedId}
           onSelect={() => onSelect(task.id)}
+          onDelete={() => onDelete(task.id)}
         />
       ))}
     </section>
@@ -936,11 +959,21 @@ function ConversationPane({ task, role }: { task: RelayTask; role: "planner" | "
   );
 }
 
-function TaskRow({ task, selected, onSelect }: { task: RelayTask; selected: boolean; onSelect: () => void }) {
+function TaskRow({ task, selected, onSelect, onDelete }: { task: RelayTask; selected: boolean; onSelect: () => void; onDelete: () => void }) {
   const Icon = statusIcons[task.status];
+  const canDelete = task.status !== "queued" && task.status !== "running";
   return (
-    <button className={`task-row ${selected ? "selected" : ""}`} onClick={onSelect}>
-      <span className={`task-status-icon status-${task.status}`}><Icon size={16} /></span>
+    <div className={`task-row ${selected ? "selected" : ""}`} role="button" tabIndex={0} onClick={onSelect} onKeyDown={(event) => {
+      if (event.key === "Enter" || event.key === " ") onSelect();
+    }}>
+      {canDelete ? (
+        <button className={`task-status-icon task-delete status-${task.status}`} title="删除对话" aria-label={`删除 ${task.request.title}`} onClick={(event) => {
+          event.stopPropagation();
+          onDelete();
+        }}><Icon size={16} /></button>
+      ) : (
+        <span className={`task-status-icon status-${task.status}`}><Icon size={16} /></span>
+      )}
       <span className="task-copy">
         <strong>{task.unread && <i className="unread-dot" />}{task.request.title}</strong>
         <small>{task.request.objective}</small>
@@ -949,7 +982,7 @@ function TaskRow({ task, selected, onSelect }: { task: RelayTask; selected: bool
         <small>{formatTime(task.updatedAt)}</small>
         <b>{formatTokens(task.usage.inputTokens + task.usage.outputTokens)}</b>
       </span>
-    </button>
+    </div>
   );
 }
 

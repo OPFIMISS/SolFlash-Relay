@@ -65,6 +65,13 @@ export class TaskStore extends EventEmitter {
     return task;
   }
 
+  async delete(id: string) {
+    if (!this.#tasks.delete(id)) return false;
+    await this.#persist();
+    this.emit("task-deleted", id);
+    return true;
+  }
+
   async appendEvent(taskId: string, event: RelayEvent) {
     const task = this.#tasks.get(taskId);
     if (!task) return null;

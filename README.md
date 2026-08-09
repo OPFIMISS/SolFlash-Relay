@@ -2,7 +2,7 @@
 
 **中文** | [English](#english)
 
-当前版本 / Current version: `0.6.2`<br>
+当前版本 / Current version: `0.6.3`<br>
 Windows 10/11 · MIT License · Local-first · MCP
 
 SolFlash Relay 是一个本地多 Agent 编程控制面：让 Codex / Sol 负责规划、架构、UI 与最终审查，再把边界明确的代码实现交给 Claude Code Haha / DeepSeek Flash 或其他执行 Agent。
@@ -26,8 +26,10 @@ SolFlash Relay 是一个本地多 Agent 编程控制面：让 Codex / Sol 负责
 - **中途接管已有 Haha 对话**：按项目绝对路径扫描原生 Haha 会话，复用原 `sessionId` 发送 Sol 的纠偏指令，不创建新对话。
 - **阻止 `/usage` 对话污染**：检测 Token Monitor 的 Claude 额度轮询，备份配置后可一键关闭，同时保留其他 Provider 和历史数据。
 
-## 0.6.2 重点更新
+## 0.6.3 重点更新
 
+- 修复接管 Haha 对话时对外部 `app.asar` 的错误预检查；指令现在能够实际发送到原 `sessionId`。
+- 失败、完成、取消或等待中的任务可点击左侧状态图标直接删除，记录会同时从界面和本地持久化存储移除。
 - 后台托管始终保留可见入口：关闭主窗口会最小化到任务栏，不再进入“无窗口、无托盘但进程仍运行”的状态。
 - 由 MCP 自动启动后台宿主时，也会创建最小化窗口并维持托盘图标；托盘对象异常丢失时会自动重建。
 - Setup 安装和卸载前会先请求旧实例退出，再清理残留的主进程、GPU/网络子进程和 MCP 进程，避免升级时反复提示程序未关闭。
@@ -72,8 +74,8 @@ flowchart LR
 
 推荐从 [Releases](https://github.com/OPFIMISS/SolFlash-Relay/releases) 下载：
 
-- `SolFlash-Relay-0.6.2-x64-setup.exe`：推荐版本，支持后台托管和一键安装 Codex MCP。
-- `SolFlash-Relay-0.6.2-x64-portable.exe`：便携控制台与后台宿主；由于便携外壳不能稳定转发 MCP stdio，不提供一键 MCP 安装。
+- `SolFlash-Relay-0.6.3-x64-setup.exe`：推荐版本，支持后台托管和一键安装 Codex MCP。
+- `SolFlash-Relay-0.6.3-x64-portable.exe`：便携控制台与后台宿主；由于便携外壳不能稳定转发 MCP stdio，不提供一键 MCP 安装。
 
 安装版使用步骤：
 
@@ -93,13 +95,13 @@ flowchart LR
 
 1. 已安装 Claude Code Haha，并在 Haha 内配置好 Provider / API。
 2. 在 Haha 中手动新建一次普通会话，确认目标模型可以正常回复。
-3. 下载的是 `SolFlash-Relay-0.6.2-x64-setup.exe`，不是 Portable 便携版。
+3. 下载的是 `SolFlash-Relay-0.6.3-x64-setup.exe`，不是 Portable 便携版。
 
 > **Codex MCP 安装仅支持 Setup 版本。** Portable 只提供面板与后台托管；切换到 Setup 前，请先从任务栏或托盘退出 Portable。
 
 ### 1. 安装并启动 Setup 版本
 
-从 [GitHub Releases](https://github.com/OPFIMISS/SolFlash-Relay/releases/latest) 下载 `SolFlash-Relay-0.6.2-x64-setup.exe`，完成安装后启动 SolFlash Relay。
+从 [GitHub Releases](https://github.com/OPFIMISS/SolFlash-Relay/releases/latest) 下载 `SolFlash-Relay-0.6.3-x64-setup.exe`，完成安装后启动 SolFlash Relay。
 
 看到顶部“Relay 后台托管已开启”说明本地服务已经运行。关闭窗口后它会最小化，并同时保留 Windows 任务栏和托盘入口。
 
@@ -269,7 +271,8 @@ Relay does not proxy model APIs or own provider credentials. Every Agent keeps i
 - Requested model, Haha CLI alias, and provider-reported effective model are recorded separately. Missing or empty replies fail explicitly.
 - Built-in profiles cover Codex, Claude Code Haha, Claude Code CLI, OpenCode, and Reasonix, plus credential-free custom CLI adapters.
 - Existing Haha conversations can be adopted by exact project path and resumed with the original `sessionId` for Sol-directed corrections.
-- Version `0.6.2` keeps both a taskbar entry and a tray icon while hosted in the background. Closing the main window minimizes it instead of making the process unreachable.
+- Version `0.6.3` fixes adopted Haha-session delivery and adds persistent task deletion from the conversation list.
+- Relay keeps both a taskbar entry and a tray icon while hosted in the background. Closing the main window minimizes it instead of making the process unreachable.
 - Setup and uninstall now deterministically stop Relay and MCP process trees before replacing files.
 - Since `0.6.1`, Relay reads the canonical project path from Haha session metadata, so sessions are not lost when later messages run in a project subdirectory.
 - Adopted task and executor conversation titles match Haha's native AI title, with a short `sessionId` shown for unambiguous identification; internal task notifications are excluded.
@@ -279,15 +282,15 @@ Relay does not proxy model APIs or own provider credentials. Every Agent keeps i
 
 Download the recommended Setup build from [GitHub Releases](https://github.com/OPFIMISS/SolFlash-Relay/releases):
 
-- `SolFlash-Relay-0.6.2-x64-setup.exe`: desktop host, tray mode, and one-click Codex MCP installation.
-- `SolFlash-Relay-0.6.2-x64-portable.exe`: portable dashboard and background host; MCP stdio installation requires the Setup build.
+- `SolFlash-Relay-0.6.3-x64-setup.exe`: desktop host, tray mode, and one-click Codex MCP installation.
+- `SolFlash-Relay-0.6.3-x64-portable.exe`: portable dashboard and background host; MCP stdio installation requires the Setup build.
 
 Open Agent settings, select the planner/executor profiles and models, install Codex MCP, restart Codex, then paste the copied Relay instruction into the Codex project that should act as planner.
 
 ### Five-minute quick start
 
 1. Configure Haha's provider/API first and verify that Haha can answer a normal message.
-2. Install `SolFlash-Relay-0.6.2-x64-setup.exe`. The Portable build cannot install Codex MCP; exit it from the taskbar or tray before using Setup.
+2. Install `SolFlash-Relay-0.6.3-x64-setup.exe`. The Portable build cannot install Codex MCP; exit it from the taskbar or tray before using Setup.
 3. In Relay settings, choose `Codex / gpt-5.6-sol` as planner and `Claude Code Haha / deepseek-v4-flash` as executor. Start with medium effort to reduce cost.
 4. Click **Install Codex MCP**, then fully quit and restart Codex.
 5. Open the real target project in Codex, click **Copy usage instruction** in Relay, and paste it before your implementation request.

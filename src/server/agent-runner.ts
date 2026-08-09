@@ -155,7 +155,6 @@ const buildHahaRun = async (
   );
   const appRoot = path.join(relayConfig.hahaRoot, "resources", "app.asar");
   await access(sidecar);
-  await access(appRoot);
   const configDir = await prepareHahaConfig(relayConfig);
   const cliModel = await resolveHahaModel(relayConfig, requestedModel);
   const tools = relayConfig.hahaAllowShell
