@@ -152,6 +152,8 @@ button { color: inherit; }
 .conversation-pane > header > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .conversation-pane > header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .conversation-pane > header small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-soft); font-size: 10px; }
+.conversation-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.compact-icon-button { width: 28px; height: 28px; min-height: 28px; border-radius: 7px; }
 .conversation-messages { display: flex; flex-direction: column; gap: 7px; max-height: 250px; overflow: auto; padding-right: 3px; }
 .conversation-message { padding: 10px 11px; border-left: 3px solid var(--accent); border-radius: 0 7px 7px 0; background: var(--surface-raised); }
 .conversation-executor .conversation-message { border-left-color: var(--blue); }

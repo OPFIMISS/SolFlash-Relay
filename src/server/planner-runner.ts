@@ -9,20 +9,26 @@ export interface PlannerReview {
   usage: RelayUsage;
 }
 
+type PlannerProgress = (summary: string) => Promise<void>;
+
 export interface PlannerRunner {
   planTask(
     task: RelayTask,
     goal: string,
     onThreadCreated?: (threadId: string) => Promise<void>,
+    onProgress?: PlannerProgress,
   ): Promise<PlannerReview>;
   reviewAdoption(
     task: RelayTask,
     session: HahaSessionSummary,
     goal: string,
     onThreadCreated?: (threadId: string) => Promise<void>,
+    onProgress?: PlannerProgress,
   ): Promise<PlannerReview>;
-  continueReview(task: RelayTask, goal: string): Promise<PlannerReview>;
-  verifyImplementation(task: RelayTask): Promise<PlannerReview>;
+  continueReview(task: RelayTask, goal: string, onProgress?: PlannerProgress): Promise<PlannerReview>;
+  verifyImplementation(task: RelayTask, onProgress?: PlannerProgress): Promise<PlannerReview>;
+  releaseThread?(threadId: string): void;
+  close?(): void;
 }
 
 const adoptionSchema = {
@@ -47,22 +53,32 @@ const verificationSchema = {
 } as const;
 
 export class CodexPlanner implements PlannerRunner {
-  async planTask(task: RelayTask, goal: string, onThreadCreated?: (threadId: string) => Promise<void>) {
+  readonly #servers = new Map<string, CodexAppServer>();
+
+  async planTask(
+    task: RelayTask,
+    goal: string,
+    onThreadCreated?: (threadId: string) => Promise<void>,
+    onProgress?: PlannerProgress,
+  ) {
     const server = new CodexAppServer();
+    let threadId = "";
     try {
       await server.initialize();
-      const threadId = await server.startThread({
+      threadId = await server.startThread({
         cwd: task.request.workdir,
         model: plannerModel(task),
         effort: plannerEffort(task),
         title: `${task.projectName} · ${task.request.title}`.slice(0, 96),
       });
+      this.#servers.set(threadId, server);
       await onThreadCreated?.(threadId);
       const turn = await server.runTurn({
         threadId,
         model: plannerModel(task),
         effort: plannerEffort(task),
         outputSchema: adoptionSchema,
+        onProgress: (message) => forwardProgress(message, onProgress),
         prompt:
           `# SolFlash Relay 新任务：${task.request.title}\n\n` +
           `你是本任务真实的主策划 Agent。请先在当前项目目录只读理解需求和现有代码，不要修改文件，不要调用 SolFlash Relay MCP，也不要自行实现。\n\n` +
@@ -75,8 +91,10 @@ export class CodexPlanner implements PlannerRunner {
       const result = parseResponse<{ summary: string; instruction: string }>(turn.finalResponse);
       if (!result.instruction.trim()) throw new Error("Planner returned an empty executor instruction.");
       return { threadId, summary: result.summary.trim(), instruction: result.instruction.trim(), usage: turn.usage };
-    } finally {
+    } catch (error) {
+      if (threadId) this.#servers.delete(threadId);
       server.close();
+      throw error;
     }
   }
 
@@ -85,22 +103,26 @@ export class CodexPlanner implements PlannerRunner {
     session: HahaSessionSummary,
     goal: string,
     onThreadCreated?: (threadId: string) => Promise<void>,
+    onProgress?: PlannerProgress,
   ) {
     const server = new CodexAppServer();
+    let threadId = "";
     try {
       await server.initialize();
-      const threadId = await server.startThread({
+      threadId = await server.startThread({
         cwd: task.request.workdir,
         model: plannerModel(task),
         effort: plannerEffort(task),
         title: `${task.projectName} · Sol 接管 ${session.title}`.slice(0, 96),
       });
+      this.#servers.set(threadId, server);
       await onThreadCreated?.(threadId);
       const turn = await server.runTurn({
         threadId,
         model: plannerModel(task),
         effort: plannerEffort(task),
         outputSchema: adoptionSchema,
+        onProgress: (message) => forwardProgress(message, onProgress),
         prompt:
           `# SolFlash Relay 接管：${session.title}\n\n` +
           `你是本任务真实的 Codex / Sol 决策层。请在当前项目目录进行只读审查，不要修改文件，不要调用 SolFlash Relay MCP，也不要把工作再次委派出去。\n\n` +
@@ -119,72 +141,97 @@ export class CodexPlanner implements PlannerRunner {
         instruction: result.instruction.trim(),
         usage: turn.usage,
       };
-    } finally {
+    } catch (error) {
+      if (threadId) this.#servers.delete(threadId);
       server.close();
+      throw error;
     }
   }
 
-  async verifyImplementation(task: RelayTask) {
+  async verifyImplementation(task: RelayTask, onProgress?: PlannerProgress) {
     if (!task.plannerThreadId) throw new Error("Cannot verify without a Codex planner thread ID.");
-    const server = new CodexAppServer();
-    try {
-      await server.initialize();
-      await server.resumeThread(task.plannerThreadId, { cwd: task.request.workdir, model: plannerModel(task) });
-      const turn = await server.runTurn({
-        threadId: task.plannerThreadId,
-        model: plannerModel(task),
-        effort: plannerEffort(task),
-        outputSchema: verificationSchema,
-        prompt:
-          `Flash 已在原 Haha sessionId ${task.sessionId} 完成一轮修改。\n\n` +
-          `Flash 最终回复：\n${task.summary || "（空）"}\n\n` +
-          `检测到的变更文件：\n${task.changedFiles.map((file) => `- ${file}`).join("\n") || "（无）"}\n\n` +
-          `范围警告：\n${task.scopeWarnings.map((file) => `- ${file}`).join("\n") || "（无）"}\n\n` +
-          `请继续在同一 Codex 对话中只读审查真实代码和 Git diff，不要修改文件，不要调用 Relay MCP。` +
-          `若实现符合接管目标，verdict=pass 且 instruction 留空；若仍需修复，verdict=revise 并给出下一条完整 Flash 指令。`,
-      });
-      const result = parseResponse<{ verdict: "pass" | "revise"; summary: string; instruction: string }>(turn.finalResponse);
-      if (result.verdict === "revise" && !result.instruction.trim()) {
-        throw new Error("Codex planner requested revision but returned no instruction.");
-      }
-      return {
-        threadId: task.plannerThreadId,
-        verdict: result.verdict,
-        summary: result.summary.trim(),
-        instruction: result.instruction.trim(),
-        usage: turn.usage,
-      };
-    } finally {
-      server.close();
+    const server = await this.#serverFor(task);
+    const turn = await server.runTurn({
+      threadId: task.plannerThreadId,
+      model: plannerModel(task),
+      effort: plannerEffort(task),
+      outputSchema: verificationSchema,
+      onProgress: (message) => forwardProgress(message, onProgress),
+      prompt:
+        `Flash 已在原 Haha sessionId ${task.sessionId} 完成一轮修改。\n\n` +
+        `Flash 最终回复：\n${task.summary || "（空）"}\n\n` +
+        `检测到的变更文件：\n${task.changedFiles.map((file) => `- ${file}`).join("\n") || "（无）"}\n\n` +
+        `范围警告：\n${task.scopeWarnings.map((file) => `- ${file}`).join("\n") || "（无）"}\n\n` +
+        `请继续在同一 Codex 对话中只读审查真实代码和 Git diff，不要修改文件，不要调用 Relay MCP。` +
+        `若实现符合接管目标，verdict=pass 且 instruction 留空；若仍需修复，verdict=revise 并给出下一条完整 Flash 指令。`,
+    });
+    const result = parseResponse<{ verdict: "pass" | "revise"; summary: string; instruction: string }>(turn.finalResponse);
+    if (result.verdict === "revise" && !result.instruction.trim()) {
+      throw new Error("Codex planner requested revision but returned no instruction.");
     }
+    return {
+      threadId: task.plannerThreadId,
+      verdict: result.verdict,
+      summary: result.summary.trim(),
+      instruction: result.instruction.trim(),
+      usage: turn.usage,
+    };
   }
 
-  async continueReview(task: RelayTask, goal: string) {
+  async continueReview(task: RelayTask, goal: string, onProgress?: PlannerProgress) {
     if (!task.plannerThreadId) throw new Error("Cannot continue without a Codex planner thread ID.");
+    const server = await this.#serverFor(task);
+    const turn = await server.runTurn({
+      threadId: task.plannerThreadId,
+      model: plannerModel(task),
+      effort: plannerEffort(task),
+      outputSchema: adoptionSchema,
+      onProgress: (message) => forwardProgress(message, onProgress),
+      prompt:
+        `用户对接管任务补充了新的决策要求：\n${goal}\n\n` +
+        `请在同一项目和同一 Codex 对话中只读检查当前代码、Git diff 和已有上下文。不要修改文件，不要调用 Relay MCP。` +
+        `输出 summary 和一条准备交给原 Haha sessionId ${task.sessionId} 的完整 instruction。`,
+    });
+    const result = parseResponse<{ summary: string; instruction: string }>(turn.finalResponse);
+    if (!result.instruction.trim()) throw new Error("Codex planner returned an empty Flash instruction.");
+    return {
+      threadId: task.plannerThreadId,
+      summary: result.summary.trim(),
+      instruction: result.instruction.trim(),
+      usage: turn.usage,
+    };
+  }
+
+  releaseThread(threadId: string) {
+    const server = this.#servers.get(threadId);
+    if (!server) return;
+    this.#servers.delete(threadId);
+    server.close();
+  }
+
+  close() {
+    for (const server of this.#servers.values()) server.close();
+    this.#servers.clear();
+  }
+
+  async #serverFor(task: RelayTask) {
+    const threadId = task.plannerThreadId;
+    if (!threadId) throw new Error("Cannot continue without a Codex planner thread ID.");
+    const existing = this.#servers.get(threadId);
+    if (existing) return existing;
+
     const server = new CodexAppServer();
     try {
       await server.initialize();
-      await server.resumeThread(task.plannerThreadId, { cwd: task.request.workdir, model: plannerModel(task) });
-      const turn = await server.runTurn({
-        threadId: task.plannerThreadId,
+      await server.resumeThread(threadId, {
+        cwd: task.request.workdir,
         model: plannerModel(task),
-        effort: plannerEffort(task),
-        outputSchema: adoptionSchema,
-        prompt:
-          `用户对接管任务补充了新的决策要求：\n${goal}\n\n` +
-          `请在同一项目和同一 Codex 对话中只读检查当前代码、Git diff 和已有上下文。不要修改文件，不要调用 Relay MCP。` +
-          `输出 summary 和一条准备交给原 Haha sessionId ${task.sessionId} 的完整 instruction。`,
       });
-      const result = parseResponse<{ summary: string; instruction: string }>(turn.finalResponse);
-      if (!result.instruction.trim()) throw new Error("Codex planner returned an empty Flash instruction.");
-      return {
-        threadId: task.plannerThreadId,
-        summary: result.summary.trim(),
-        instruction: result.instruction.trim(),
-        usage: turn.usage,
-      };
-    } finally {
+      this.#servers.set(threadId, server);
+      return server;
+    } catch (error) {
       server.close();
+      throw error;
     }
   }
 }
@@ -199,5 +246,17 @@ const parseResponse = <T>(value: string): T => {
     const match = value.match(/\{[\s\S]*\}/);
     if (!match) throw new Error(`Codex planner returned invalid structured output: ${value.slice(0, 500)}`);
     return JSON.parse(match[0]) as T;
+  }
+};
+
+const forwardProgress = async (value: string, onProgress?: PlannerProgress) => {
+  if (!onProgress) return;
+  try {
+    const parsed = parseResponse<{ summary?: string; instruction?: string }>(value);
+    const instruction = parsed.instruction?.trim() ?? "";
+    if (!parsed.summary?.trim() || !/(进行中|正在|继续审查|继续规划|in progress)/i.test(instruction)) return;
+    await onProgress(parsed.summary.trim());
+  } catch {
+    // Structured final output is handled by the caller; malformed progress is ignored.
   }
 };

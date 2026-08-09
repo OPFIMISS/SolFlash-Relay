@@ -5,7 +5,7 @@ import os from "node:os";
 
 import type { RelayConfigView } from "../shared/types.js";
 
-export const relayVersion = "0.6.4";
+export const relayVersion = "0.6.5";
 
 const parsePort = (value: string | undefined, fallback: number) => {
   const parsed = Number(value);
@@ -25,6 +25,7 @@ export interface RelayConfig extends RelayConfigView {
   hahaStateDir: string;
   hahaAllowShell: boolean;
   hahaShareDesktopState: boolean;
+  hahaServerUrl: string;
   tokenMonitorSecret: string;
 }
 
@@ -47,6 +48,7 @@ export const config: RelayConfig = {
     process.env.HAHA_SHARE_DESKTOP_STATE,
     true,
   ),
+  hahaServerUrl: process.env.HAHA_SERVER_URL ?? "http://127.0.0.1:6771",
   tokenMonitorUrl:
     process.env.TOKEN_MONITOR_URL ?? "http://127.0.0.1:17321",
   tokenMonitorSecret: process.env.TOKEN_MONITOR_SECRET ?? "",

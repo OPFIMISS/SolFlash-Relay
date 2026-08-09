@@ -1112,7 +1112,7 @@ function ConversationPane({ task, role }: { task: RelayTask; role: "planner" | "
       ? `B · ${task.sourceSessionTitle}`
       : "B · 执行";
   const detail = isPlanner
-    ? `${agent} · ${model}${task.plannerThreadId ? ` · thread ${task.plannerThreadId.slice(0, 8)}` : " · 等待创建真实对话"}`
+    ? `${agent} · ${model}${task.plannerThreadId ? ` · 已创建 Codex 对话 · ${task.plannerThreadId}` : " · 等待创建真实对话"}`
     : `${agent} · ${model} · ${task.sessionId.slice(0, 8)}`;
   const phaseLabel = isPlanner
     ? task.workflowPhase === "planner-review"
@@ -1135,8 +1135,18 @@ function ConversationPane({ task, role }: { task: RelayTask; role: "planner" | "
     <section className={`conversation-pane conversation-${role}`}>
       <header>
         <span className="conversation-avatar">{isPlanner ? <Code2 size={16} /> : <Bot size={16} />}</span>
-        <div><strong title={title}>{title}</strong><small>{detail}</small></div>
-        <StatusPill status={task.status} label={phaseLabel} />
+        <div><strong title={title}>{title}</strong><small title={detail}>{detail}</small></div>
+        <div className="conversation-header-actions">
+          {isPlanner && task.plannerThreadId && (
+            <button
+              className="icon-button compact-icon-button"
+              title="复制完整 Codex 对话 ID"
+              aria-label="复制完整 Codex 对话 ID"
+              onClick={() => void navigator.clipboard.writeText(task.plannerThreadId ?? "")}
+            ><Copy size={14} /></button>
+          )}
+          <StatusPill status={task.status} label={phaseLabel} />
+        </div>
       </header>
       <div className="conversation-messages">
         {messages.length > 0 ? messages.map((message) => (

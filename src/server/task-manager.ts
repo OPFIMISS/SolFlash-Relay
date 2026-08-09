@@ -198,7 +198,7 @@ export class TaskManager {
         task.plannerThreadId = threadId;
         await this.store.set(task);
         await this.#event(task, "task.planner-started", `Created visible planner thread ${threadId}.`);
-      });
+      }, (summary) => this.#plannerProgress(task, summary));
       task.plannerThreadId = review.threadId;
       task.plannerRounds = 1;
       task.plannerUsage = mergeUsage(task.plannerUsage ?? emptyUsage(), review.usage);
@@ -239,7 +239,7 @@ export class TaskManager {
       await this.store.set(task);
       await this.#message(task, "planner", "instruction", goal);
       await this.#event(task, "task.planner-started", `User guidance was sent to Codex thread ${task.plannerThreadId}.`);
-      const review = await this.planner.continueReview(task, goal);
+      const review = await this.planner.continueReview(task, goal, (summary) => this.#plannerProgress(task, summary));
       task.plannerRounds = (task.plannerRounds ?? 0) + 1;
       task.plannerUsage = mergeUsage(task.plannerUsage ?? emptyUsage(), review.usage);
       await this.store.set(task);
@@ -346,7 +346,7 @@ export class TaskManager {
         task.plannerThreadId = threadId;
         await this.store.set(task);
         await this.#event(task, "task.planner-started", `Created visible Codex planner thread ${threadId}.`);
-      });
+      }, (summary) => this.#plannerProgress(task, summary));
       task.plannerThreadId = review.threadId;
       task.plannerRounds = 1;
       task.plannerUsage = mergeUsage(task.plannerUsage ?? emptyUsage(), review.usage);
@@ -367,6 +367,7 @@ export class TaskManager {
     task.finishedAt = new Date().toISOString();
     await this.store.set(task);
     await this.#event(task, "task.cancelled", "Task cancelled by Sol or the user.");
+    this.#releasePlanner(task);
     return task;
   }
 
@@ -398,6 +399,7 @@ export class TaskManager {
       await this.store.set(task);
       await this.#event(task, "task.cancelled", "Execution Agent stopped because Relay exited.");
     }
+    this.planner.close?.();
   }
 
   async #run(task: RelayTask, prompt: string, resume: boolean) {
@@ -529,7 +531,10 @@ export class TaskManager {
       task.workflowPhase = "planner-verification";
       await this.store.set(task);
       await this.#event(task, "task.planner-started", `Codex / Sol is reviewing Flash's real code changes in thread ${task.plannerThreadId}.`);
-      const review = await this.planner.verifyImplementation(task);
+      const review = await this.planner.verifyImplementation(
+        task,
+        (summary) => this.#plannerProgress(task, summary),
+      );
       task.plannerRounds = (task.plannerRounds ?? 0) + 1;
       task.plannerUsage = mergeUsage(task.plannerUsage ?? emptyUsage(), review.usage);
       await this.store.set(task);
@@ -557,6 +562,7 @@ export class TaskManager {
     task.unread = true;
     await this.store.set(task);
     await this.#event(task, "task.completed", message);
+    this.#releasePlanner(task);
   }
 
   async #handleAgentLine(task: RelayTask, line: string) {
@@ -624,6 +630,7 @@ export class TaskManager {
           resultMessage || "Task failed.",
           payload,
         );
+        this.#releasePlanner(task);
       }
       return true;
     }
@@ -680,6 +687,14 @@ export class TaskManager {
     });
   }
 
+  async #plannerProgress(task: RelayTask, summary: string) {
+    const content = summary.trim();
+    if (!content) return;
+    const lastPlannerMessage = [...(task.messages ?? [])].reverse().find((message) => message.role === "planner");
+    if (lastPlannerMessage?.kind === "output" && lastPlannerMessage.content === content) return;
+    await this.#message(task, "planner", "output", content);
+  }
+
   async #fail(task: RelayTask, message: string, role: "planner" | "executor" = "executor") {
     task.status = "failed";
     task.error = message;
@@ -688,6 +703,11 @@ export class TaskManager {
     await this.store.set(task);
     await this.#message(task, role, "error", message);
     await this.#event(task, "task.failed", message);
+    this.#releasePlanner(task);
+  }
+
+  #releasePlanner(task: RelayTask) {
+    if (task.plannerThreadId) this.planner.releaseThread?.(task.plannerThreadId);
   }
 
   #requireTask(taskId: string) {

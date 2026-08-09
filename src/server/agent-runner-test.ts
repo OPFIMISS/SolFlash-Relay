@@ -41,19 +41,19 @@ try {
     haha,
     task,
     "test",
-    false,
+    true,
   );
   if (visible.cwd !== workdir) throw new Error("Haha run did not preserve the exact planner workdir");
-  if (visible.cliModel !== "haiku") {
-    throw new Error(`Expected Haha Flash to resolve through haiku, received ${visible.cliModel}`);
+  if (visible.cliModel !== "deepseek-v4-flash") {
+    throw new Error(`Expected Haha desktop runtime to receive Flash, received ${visible.cliModel}`);
   }
-  if (visible.env.CLAUDE_CONFIG_DIR !== config.hahaGlobalConfigDir) {
-    throw new Error("Visible Haha task is not using the desktop session store");
+  if (visible.env.HAHA_SESSION_ID !== task.sessionId || visible.env.HAHA_MODEL_ID !== "deepseek-v4-flash") {
+    throw new Error("Visible Haha task is not targeting the adopted desktop session and model");
   }
-  if (!visible.args.includes(`${task.projectName} · ${task.request.title}`)) {
-    throw new Error("Haha session name does not include the project and task names");
+  if (!visible.args.some((item) => item.endsWith("haha-live-worker.js"))) {
+    throw new Error("Visible Haha task is not using the desktop WebSocket worker");
   }
-  if (visible.args[visible.args.indexOf("--effort") + 1] !== "high") {
+  if (visible.env.HAHA_EFFORT !== "high") {
     throw new Error("Task effort was not forwarded to Haha");
   }
 

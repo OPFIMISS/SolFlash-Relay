@@ -1,4 +1,5 @@
 import { access, copyFile, mkdir, readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import type { AgentDefinition, RelayTask } from "../shared/types.js";
@@ -145,6 +146,9 @@ const buildHahaRun = async (
   resume: boolean,
   requestedModel: string,
 ): Promise<AgentRunSpec> => {
+  if (relayConfig.hahaShareDesktopState) {
+    return buildHahaDesktopRun(relayConfig, task, prompt, resume, requestedModel);
+  }
   const sidecar = path.join(
     relayConfig.hahaRoot,
     "resources",
@@ -200,6 +204,55 @@ const buildHahaRun = async (
   };
 };
 
+const buildHahaDesktopRun = async (
+  relayConfig: RelayConfig,
+  task: RelayTask,
+  prompt: string,
+  resume: boolean,
+  requestedModel: string,
+): Promise<AgentRunSpec> => {
+  const runtime = await resolveHahaRuntime(relayConfig, requestedModel);
+  if (!resume) {
+    const response = await fetch(`${relayConfig.hahaServerUrl}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        workDir: task.request.workdir,
+        permissionMode: relayConfig.hahaAllowShell ? "bypassPermissions" : "acceptEdits",
+      }),
+    });
+    if (!response.ok) throw new Error(`Haha desktop could not create a session: ${await response.text()}`);
+    const created = await response.json() as { sessionId?: string };
+    if (!created.sessionId) throw new Error("Haha desktop created a session without a sessionId.");
+    task.sessionId = created.sessionId;
+    await fetch(`${relayConfig.hahaServerUrl}/api/sessions/${encodeURIComponent(task.sessionId)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: sessionName(task) }),
+    }).catch(() => undefined);
+  }
+
+  return {
+    command: process.execPath,
+    args: [fileURLToPath(new URL("./haha-live-worker.js", import.meta.url))],
+    cwd: task.request.workdir,
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: "1",
+      HAHA_SERVER_URL: relayConfig.hahaServerUrl,
+      HAHA_SESSION_ID: task.sessionId,
+      HAHA_PROVIDER_ID: runtime.providerId,
+      HAHA_MODEL_ID: runtime.modelId,
+      HAHA_EFFORT: task.request.effort ?? relayConfig.hahaEffort,
+      HAHA_PERMISSION_MODE: relayConfig.hahaAllowShell ? "bypassPermissions" : "acceptEdits",
+    },
+    prompt,
+    outputFormat: "stream-json",
+    requestedModel,
+    cliModel: runtime.modelId,
+  };
+};
+
 const prepareHahaConfig = async (relayConfig: RelayConfig) => {
   if (relayConfig.hahaShareDesktopState) {
     await access(path.join(relayConfig.hahaGlobalConfigDir, "cc-haha", "providers.json"));
@@ -245,6 +298,28 @@ const resolveHahaModel = async (
   } catch {
     return requestedModel;
   }
+};
+
+const resolveHahaRuntime = async (
+  relayConfig: RelayConfig,
+  requestedModel: string,
+) => {
+  const raw = await readFile(
+    path.join(relayConfig.hahaGlobalConfigDir, "cc-haha", "providers.json"),
+    "utf8",
+  );
+  const parsed = JSON.parse(raw) as {
+    activeId?: string;
+    providers?: Array<{ id?: string; models?: Record<string, string> }>;
+  };
+  const provider = parsed.providers?.find((item) => item.id === parsed.activeId);
+  if (!provider?.id) throw new Error("Haha desktop has no active API provider.");
+  const entries = Object.entries(provider.models ?? {});
+  const alias = entries.find(([name]) => name === requestedModel);
+  const direct = entries.find(([, model]) => model === requestedModel);
+  const modelId = alias?.[1] || direct?.[1] || requestedModel;
+  if (!modelId) throw new Error(`Haha desktop cannot resolve model ${requestedModel}.`);
+  return { providerId: provider.id, modelId };
 };
 
 const sessionName = (task: RelayTask) =>

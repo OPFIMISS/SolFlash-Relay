@@ -123,8 +123,16 @@ export class CodexAppServer {
     });
   }
 
-  async runTurn(options: { threadId: string; prompt: string; model: string; effort: string; outputSchema: unknown }) {
+  async runTurn(options: {
+    threadId: string;
+    prompt: string;
+    model: string;
+    effort: string;
+    outputSchema: unknown;
+    onProgress?: (message: string) => Promise<void>;
+  }) {
     let finalResponse = "";
+    let progressQueue = Promise.resolve();
     let usage: RelayUsage = {
       inputTokens: 0,
       outputTokens: 0,
@@ -147,6 +155,14 @@ export class CodexAppServer {
         const params = message.params as unknown as ItemCompletedParams;
         if (params.threadId === options.threadId && params.turnId === turnId && params.item.type === "agentMessage") {
           finalResponse = params.item.text ?? finalResponse;
+          if (params.item.text?.trim() && options.onProgress) {
+            const progress = params.item.text;
+            progressQueue = progressQueue
+              .then(() => options.onProgress?.(progress))
+              .catch((error) => {
+                this.#stderr = `${this.#stderr}\nPlanner progress callback failed: ${String(error)}`.slice(-16_000);
+              });
+          }
         }
       }
       if (message.method === "thread/tokenUsage/updated") {
@@ -170,6 +186,7 @@ export class CodexAppServer {
     if (params.turn.status !== "completed") {
       throw new Error(params.turn.error?.message ?? `Codex turn ended with ${params.turn.status}.`);
     }
+    await progressQueue;
     if (!finalResponse.trim()) throw new Error("Codex app-server completed without a final response.");
     return { threadId: options.threadId, finalResponse, usage };
   }
