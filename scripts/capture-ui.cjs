@@ -139,13 +139,13 @@ async function capture(browser, name, viewport) {
     if (!modelOptions.includes("deepseek-v4-flash") || !modelOptions.includes("deepseek-v4-pro")) {
       throw new Error(`Executor model selector is incomplete: ${modelOptions.join(", ")}`);
     }
+    await page.screenshot({ path: path.join(".relay-data", "ui-settings.png") });
     await executorSelects.nth(1).selectOption("deepseek-v4-pro");
     await executorSelects.nth(2).selectOption("high");
     await executorSelects.nth(1).selectOption("__custom");
     const customModel = executorSettings.locator(".model-field input");
     await customModel.fill("luna-code-preview");
     if ((await customModel.inputValue()) !== "luna-code-preview") throw new Error("Custom intermediary model ID was not accepted");
-    await page.screenshot({ path: path.join(".relay-data", "ui-settings.png") });
     await page.getByTitle("关闭").click();
   }
 

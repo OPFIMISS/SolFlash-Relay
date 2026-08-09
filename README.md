@@ -76,6 +76,100 @@ flowchart LR
 
 关闭窗口只会隐藏到托盘。要彻底停止 Relay，请使用托盘菜单“退出”或设置页电源按钮。
 
+## 五分钟使用教程
+
+### 0. 使用前准备
+
+开始前确认以下三点：
+
+1. 已安装 Claude Code Haha，并在 Haha 内配置好 Provider / API。
+2. 在 Haha 中手动新建一次普通会话，确认目标模型可以正常回复。
+3. 下载的是 `SolFlash-Relay-0.5.0-x64-setup.exe`，不是 Portable 便携版。
+
+> **你截图中的错误代表正在使用 Portable。** Portable 可以运行面板和后台托管，但无法安装 Codex MCP。请先从托盘彻底退出 Portable，再安装并启动 Setup 版本。
+
+### 1. 安装并启动 Setup 版本
+
+从 [GitHub Releases](https://github.com/OPFIMISS/SolFlash-Relay-/releases/latest) 下载 `SolFlash-Relay-0.5.0-x64-setup.exe`，完成安装后启动 SolFlash Relay。
+
+看到顶部“Relay 后台托管已开启”说明本地服务已经运行。关闭窗口后它仍会留在 Windows 托盘中。
+
+### 2. 选择上级和下级 Agent
+
+点击右上角设置按钮，第一次使用建议这样配置：
+
+| 设置 | 推荐值 |
+| --- | --- |
+| 主策划 Agent | `Codex` |
+| 主策划模型 | `gpt-5.6-sol` |
+| 执行 Agent | `Claude Code Haha` |
+| 执行模型 | `deepseek-v4-flash` |
+| 思考强度 | `中` |
+
+![推荐的 Agent 与模型设置](docs/images/agent-settings.png)
+
+“最大”思考强度不是开启 Relay 的必要条件。小任务先使用“中”更省 Token，复杂任务再提高。保存后，顶部链路应显示 `Codex → Relay → Claude Code Haha`。
+
+### 3. 安装 Codex MCP
+
+1. 在设置窗口点击“安装 Codex MCP”。
+2. 等待出现安装成功提示。
+3. **彻底退出并重新启动 Codex**，只关闭当前项目页面可能不会重新加载 MCP。
+4. 保持 SolFlash Relay 在运行或托盘后台状态。
+
+安装只需要做一次。以后启动 Codex 时，MCP 会连接现有 Relay；Relay 未运行时，安装版也可以自动拉起后台宿主。
+
+### 4. 在 Codex 项目中派发第一个任务
+
+在 Codex 中打开你真正要修改的项目。Relay 会把这个项目的**绝对路径**交给 Haha，因此不要先在无关目录中创建任务。
+
+点击 Relay 顶部的“复制使用指令”，粘贴到 Codex，然后在后面写具体需求。也可以直接使用下面的示例：
+
+```text
+使用 SolFlash Relay 完成这个任务。
+
+你负责分析现有代码、决定架构和最终审查。请先明确允许修改的文件、约束和验收命令，
+然后优先调用 agent_run，把机械代码实现交给 Claude Code Haha 的 deepseek-v4-flash。
+必须使用当前 Codex 项目的绝对路径。Flash 完成后检查真实 Git diff 并运行测试。
+
+任务：给设置页面的保存按钮增加加载状态，避免连续重复提交。
+```
+
+正常情况下，Codex 会自动调用 Relay 的 `agent_run`。你不需要手动复制提示词到 Haha，也不需要在 Relay 面板中创建任务。
+
+### 5. 查看执行过程和结果
+
+任务开始后可以同时在两个地方观察：
+
+- **SolFlash Relay**：左侧按项目路径显示任务；中间上方是 A（Codex）的指令，下方是 B（Haha）的回复；右侧显示 Token、费用、缓存和余额。
+- **Claude Code Haha**：同一个项目路径下会出现 Relay 创建的可见会话，可以直接查看 Flash 的原生执行记录。
+
+任务完成或失败后，Windows 会发送系统通知，并在任务栏显示未读 `1`。点击通知会打开对应任务，聚焦 Relay 后清除未读。
+
+Relay 会分别显示：
+
+- 请求模型：例如 `deepseek-v4-flash`
+- 执行 CLI 接收的别名：例如 `haiku`
+- Provider 最终回报的有效模型：应为 `deepseek-v4-flash`
+
+只有收到非空最终回复时任务才会显示“已完成”。
+
+### 6. 审查和返工
+
+Flash 完成后，Sol 仍然负责最终质量。让 Codex 检查真实 diff、越界文件和测试结果。如果只需局部修正，可以在 Codex 中继续要求它调用 `flash_send`，或在 Relay 任务底部输入“策划端返工指令”。Relay 会恢复同一个 Haha 会话。
+
+### 第一次连接失败怎么办
+
+| 现象 | 处理方法 |
+| --- | --- |
+| 点击“安装 Codex MCP”提示便携版不支持 | 退出 Portable，安装并运行 Setup EXE |
+| Codex 中没有 Relay 工具或任务不出现 | 重新点击安装 MCP，然后彻底退出并重启 Codex |
+| Relay 显示旧设置或旧任务 | 从托盘退出所有旧版 Relay，只保留最新安装版 |
+| Haha 显示 Pro | 检查 Relay 任务里的“请求模型/实际模型”，不要只看当前选中的 Haha 会话 |
+| Haha 出现 `Unknown skill: usage` | 这是 Token Monitor 的 `/usage` 探测，不是 Relay 任务 |
+| Token Monitor 显示 `fetch failed` | 不影响任务执行；Token Monitor 是可选的只读统计组件 |
+| 想确认 Flash 链路 | 先完成一个任务，再点击“验证当前项目的 Flash”；该按钮会产生一次很小的真实调用 |
+
 ## 关于 Pro、Flash 与 `Unknown skill: usage`
 
 Haha 输入框底部显示的是**当前所选 Haha 会话**的模型。Relay 发起的任务会显式传递请求模型，并在任务详情中显示最终有效模型。
@@ -153,6 +247,29 @@ Download the recommended Setup build from [GitHub Releases](https://github.com/O
 - `SolFlash-Relay-0.5.0-x64-portable.exe`: portable dashboard and background host; MCP stdio installation requires the Setup build.
 
 Open Agent settings, select the planner/executor profiles and models, install Codex MCP, restart Codex, then paste the copied Relay instruction into the Codex project that should act as planner.
+
+### Five-minute quick start
+
+1. Configure Haha's provider/API first and verify that Haha can answer a normal message.
+2. Install `SolFlash-Relay-0.5.0-x64-setup.exe`. The Portable build cannot install Codex MCP; exit it from the tray before using Setup.
+3. In Relay settings, choose `Codex / gpt-5.6-sol` as planner and `Claude Code Haha / deepseek-v4-flash` as executor. Start with medium effort to reduce cost.
+4. Click **Install Codex MCP**, then fully quit and restart Codex.
+5. Open the real target project in Codex, click **Copy usage instruction** in Relay, and paste it before your implementation request.
+6. Codex should call `agent_run` automatically. Relay creates a visible Haha conversation under the same absolute project path and returns the final reply to Codex.
+7. Review the real Git diff and tests in Codex. Use `flash_send` or the Relay follow-up box only for a targeted correction in the same Haha session.
+
+Example Codex request:
+
+```text
+Use SolFlash Relay for this task. Inspect the repository and decide the architecture first.
+Define narrow allowed files, constraints, and acceptance commands, then call agent_run
+with this Codex project's absolute path and delegate the mechanical implementation to
+Claude Code Haha deepseek-v4-flash. Review the real Git diff and tests after it returns.
+
+Task: add a loading state to the settings save button to prevent duplicate submissions.
+```
+
+If Codex does not expose the Relay tools after installation, reinstall MCP and fully restart Codex. If Relay appears to show old settings, exit every older Relay instance from the Windows tray and keep only the latest Setup build running.
 
 ### Flash verification
 
