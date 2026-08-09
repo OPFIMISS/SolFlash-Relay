@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 
 import type { AgentDefinition, RelaySettings, RelayTaskRequest } from "../shared/types.js";
+import { discoverHahaModels } from "./agent-runner.js";
 import { publicConfig, type RelayConfig } from "./config.js";
 import { TaskManager } from "./task-manager.js";
 import { TaskStore } from "./task-store.js";
@@ -25,7 +26,13 @@ export const startHttpServer = (
     response.json({ ok: true, now: new Date().toISOString() });
   });
   app.get("/api/config", (_request, response) => response.json(publicConfig(relayConfig)));
-  app.get("/api/settings", (_request, response) => response.json(settings.get()));
+  app.get("/api/settings", async (_request, response) => {
+    const current = settings.get();
+    const discovered = await discoverHahaModels(relayConfig);
+    const haha = current.agents.find((agent) => agent.id === "claude-haha");
+    if (haha) haha.models = [...new Set([...haha.models, ...discovered])];
+    response.json(current);
+  });
   app.put("/api/settings", async (request, response) => {
     try {
       response.json(await settings.save(request.body as RelaySettings));

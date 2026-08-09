@@ -30,6 +30,7 @@ const task = {
     allowedFiles: ["README.md"],
     executorAgent: "claude-haha",
     model: "deepseek-v4-flash",
+    effort: "high",
   },
 } as RelayTask;
 
@@ -52,6 +53,9 @@ try {
   if (!visible.args.includes(`${task.projectName} · ${task.request.title}`)) {
     throw new Error("Haha session name does not include the project and task names");
   }
+  if (visible.args[visible.args.indexOf("--effort") + 1] !== "high") {
+    throw new Error("Task effort was not forwarded to Haha");
+  }
 
   const isolatedState = path.join(root, "haha-state");
   const isolated = await buildAgentRun(
@@ -68,7 +72,63 @@ try {
   if (isolated.env.CLAUDE_CONFIG_DIR !== isolatedState) {
     throw new Error("Isolated run did not use the isolated state directory");
   }
-  console.log(JSON.stringify({ ok: true, workdir, cliModel: visible.cliModel, isolated: true }));
+
+  const custom: AgentDefinition = {
+    id: "custom-worker",
+    label: "Custom intermediary worker",
+    role: "executor",
+    transport: "custom-cli",
+    enabled: true,
+    command: "worker-cli",
+    models: ["sol", "luna"],
+    defaultModel: "luna",
+    args: ["run", "--model", "{model}", "--project", "{workdir}", "--session", "{sessionId}"],
+    promptTransport: "stdin",
+    outputFormat: "jsonl",
+  };
+  const customTask = {
+    ...task,
+    requestedModel: "luna",
+    request: { ...task.request, executorAgent: custom.id, model: "luna" },
+  };
+  const customRun = await buildAgentRun(config, custom, customTask, "custom prompt", false);
+  if (customRun.command !== "worker-cli" || !customRun.args.includes("luna") || customRun.cwd !== workdir) {
+    throw new Error("Custom intermediary Agent did not preserve model and project path");
+  }
+  if (customRun.prompt !== "custom prompt" || customRun.outputFormat !== "jsonl") {
+    throw new Error("Custom Agent prompt transport or output format is incorrect");
+  }
+
+  const opencode: AgentDefinition = {
+    id: "opencode",
+    label: "OpenCode",
+    role: "executor",
+    transport: "opencode-cli",
+    enabled: true,
+    command: "opencode",
+    models: ["openrouter/luna"],
+    defaultModel: "openrouter/luna",
+  };
+  const opencodeRun = await buildAgentRun(
+    config,
+    opencode,
+    { ...task, requestedModel: "openrouter/luna", request: { ...task.request, executorAgent: opencode.id, model: "openrouter/luna" } },
+    "opencode prompt",
+    false,
+  );
+  if (!opencodeRun.args.includes("openrouter/luna") || !opencodeRun.args.includes(workdir)) {
+    throw new Error("OpenCode adapter did not receive the selected intermediary model and workdir");
+  }
+
+  console.log(JSON.stringify({
+    ok: true,
+    workdir,
+    cliModel: visible.cliModel,
+    effort: "high",
+    isolated: true,
+    customModel: customRun.cliModel,
+    opencodeModel: opencodeRun.cliModel,
+  }));
 } finally {
   await rm(root, { recursive: true, force: true });
 }

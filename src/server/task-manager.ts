@@ -91,6 +91,7 @@ export class TaskManager {
         plannerModel,
         executorAgent,
         model: requestedModel,
+        effort: normalized.effort ?? settings.executorEffort,
       },
       status: "queued",
       createdAt: now,

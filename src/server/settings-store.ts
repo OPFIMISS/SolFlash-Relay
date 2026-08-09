@@ -59,6 +59,7 @@ const defaults = (): RelaySettings => ({
   plannerModel: "gpt-5.6-sol",
   executorAgent: "claude-haha",
   executorModel: "deepseek-v4-flash",
+  executorEffort: "medium",
   agents: structuredClone(builtInAgents),
 });
 
@@ -132,6 +133,7 @@ const normalizeSettings = (input: RelaySettings): RelaySettings => {
     plannerModel: input?.plannerModel ?? fallback.plannerModel,
     executorAgent: input?.executorAgent || fallback.executorAgent,
     executorModel: input?.executorModel ?? fallback.executorModel,
+    executorEffort: input?.executorEffort ?? fallback.executorEffort,
     agents,
   };
 };

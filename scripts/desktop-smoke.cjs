@@ -7,6 +7,7 @@ const path = require("node:path");
     cwd: process.cwd(),
     env: {
       ...process.env,
+      RELAY_PORT: "17426",
       RELAY_DATA_DIR: path.resolve(".relay-data", "desktop-smoke"),
       RELAY_USER_DATA_DIR: path.resolve(".relay-data", "desktop-smoke-user-data"),
     },
@@ -14,18 +15,24 @@ const path = require("node:path");
   try {
     const window = await electronApp.firstWindow({ timeout: 15000 });
     await window.waitForSelector(".dashboard-grid");
-    const audit = await window.evaluate(() => ({
+    const audit = await window.evaluate(async () => ({
       desktopBridge: Boolean(window.relayDesktop),
+      desktopStatus: await window.relayDesktop?.getStatus(),
+      copied: await window.relayDesktop?.copyUsagePrompt(),
       viewportWidth: window.innerWidth,
       documentWidth: document.documentElement.scrollWidth,
       horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
       title: document.title,
     }));
     if (!audit.desktopBridge) throw new Error("Sandboxed desktop preload bridge is unavailable");
+    if (!audit.desktopStatus?.hosted || !audit.copied?.includes("已复制")) {
+      throw new Error("Desktop activation status or usage prompt bridge is unavailable");
+    }
     if (audit.horizontalOverflow) throw new Error("Desktop window has horizontal overflow");
     await window.screenshot({ path: path.join(".relay-data", "desktop-window.png"), fullPage: true });
     await window.getByTitle("Agent 与模型设置").click();
     await window.waitForSelector(".settings-dialog");
+    await window.waitForTimeout(350);
     if (!(await window.getByText("安装 Codex MCP").isVisible())) {
       throw new Error("Desktop MCP install command is not visible");
     }

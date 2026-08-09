@@ -1,8 +1,9 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { RelayRuntime } from "../server/runtime.js";
+import { buildCodexMcpBlock, hasInstalledCodexMcp, mergeCodexMcpBlock } from "./codex-config.js";
 
 const relayUrl = `http://${process.env.RELAY_HOST ?? "127.0.0.1"}:${process.env.RELAY_PORT ?? "17322"}`;
 const backgroundMode = process.argv.includes("--background");
@@ -158,7 +159,30 @@ function createApplicationMenu() {
 
 function registerIpc() {
   ipcMain.handle("relay:install-mcp", installMcpConfig);
+  ipcMain.handle("relay:get-status", getDesktopStatus);
+  ipcMain.handle("relay:copy-usage-prompt", () => {
+    clipboard.writeText(usagePrompt);
+    return "已复制 Codex 使用指令。";
+  });
   ipcMain.handle("relay:quit", async () => shutdownAndQuit());
+}
+
+async function getDesktopStatus() {
+  const portable = Boolean(process.env.PORTABLE_EXECUTABLE_FILE);
+  let current = "";
+  try {
+    current = await readFile(codexConfigPath(), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return {
+    hosted: true,
+    packaged: app.isPackaged,
+    portable,
+    canInstallMcp: app.isPackaged && !portable,
+    mcpInstalled: hasInstalledCodexMcp(current, process.execPath),
+    configPath: codexConfigPath(),
+  };
 }
 
 async function installMcpConfig() {
@@ -168,27 +192,8 @@ async function installMcpConfig() {
   if (process.env.PORTABLE_EXECUTABLE_FILE) {
     throw new Error("便携版外壳不支持 MCP 所需的标准输入输出转发。请安装 Setup 版本，再从安装后的程序中执行此操作。");
   }
-  const configPath = process.env.RELAY_CODEX_CONFIG
-    || path.join(app.getPath("home"), ".codex", "config.toml");
-  const executable = escapeToml(process.execPath);
-  const mcpScript = escapeToml(path.join(app.getAppPath(), "dist", "server", "mcp.js"));
-  const executableDir = escapeToml(path.dirname(process.execPath));
-  const block = [
-    "# BEGIN sol-flash-relay",
-    "[mcp_servers.sol_flash_relay]",
-    `command = "${executable}"`,
-    `args = ["${mcpScript}"]`,
-    `cwd = "${executableDir}"`,
-    "enabled = true",
-    "startup_timeout_sec = 15",
-    "tool_timeout_sec = 900",
-    "",
-    "[mcp_servers.sol_flash_relay.env]",
-    'ELECTRON_RUN_AS_NODE = "1"',
-    `RELAY_DESKTOP_EXECUTABLE = "${executable}"`,
-    `RELAY_DESKTOP_CWD = "${executableDir}"`,
-    "# END sol-flash-relay",
-  ].join("\r\n");
+  const configPath = codexConfigPath();
+  const block = buildCodexMcpBlock(process.execPath, app.getAppPath());
   await mkdir(path.dirname(configPath), { recursive: true });
   let current = "";
   try {
@@ -196,9 +201,7 @@ async function installMcpConfig() {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  const pattern = /^# BEGIN sol-flash-relay\r?\n.*?^# END sol-flash-relay\r?\n?/gms;
-  const base = current.replace(pattern, "").trimEnd();
-  const next = `${base}${base ? "\r\n\r\n" : ""}${block}\r\n`;
+  const next = mergeCodexMcpBlock(current, block);
   const temporary = `${configPath}.tmp`;
   await writeFile(temporary, next, "utf8");
   await rename(temporary, configPath);
@@ -224,6 +227,9 @@ function iconPath() {
     : path.resolve("build", "icon.png");
 }
 
-const escapeToml = (value: string) => value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
-
 const desktopExecutable = () => process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
+
+const codexConfigPath = () => process.env.RELAY_CODEX_CONFIG
+  || path.join(app.getPath("home"), ".codex", "config.toml");
+
+const usagePrompt = `使用 SolFlash Relay 完成这个任务。你负责架构、UI 决策和最终审查；在明确文件范围、约束和验收命令后，通过 agent_start 把机械实现交给执行 Agent。必须传入当前项目的绝对路径，等待执行完成后检查真实 diff 和测试，只在必要时用 flash_send 定点返工。`;

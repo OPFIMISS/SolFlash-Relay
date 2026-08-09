@@ -1,6 +1,6 @@
 # SolFlash Relay
 
-Current version: `0.3.0`.
+Current version: `0.4.0`.
 
 SolFlash Relay is a local, model-free control plane for delegating bounded implementation work between configurable planning and execution Agents.
 
@@ -24,15 +24,17 @@ flowchart LR
 
 - Generic `agent_start`, profile selection, adapter registration, and backward-compatible `flash_*` MCP tools.
 - Switchable planning Agent/model and execution Agent/model defaults from the dashboard or MCP.
+- Complete model selectors for built-in choices, editable custom intermediary model IDs, and a persisted default execution effort.
 - Built-in adapters for Claude Code Haha, Claude Code CLI, OpenCode, and Reasonix, plus credential-free custom CLI manifests.
 - Persistent executor session IDs with same-session follow-up when the selected Agent supports resume.
 - The executor always receives the exact absolute project path supplied by the planner. Haha desktop sessions are grouped under that same project.
 - Existing provider credentials remain managed by their owning Agent. Relay never returns them through MCP or the dashboard.
 - Haha model IDs are resolved through its active provider slots and checked against the effective model returned by the run.
 - Live task events, tool calls, summaries, model usage, token counts, and cost.
+- Visible activation state, one-click MCP installation, and a copyable Codex delegation instruction.
 - Before/after Git status and content hashes with warnings for files outside `allowedFiles`.
 - Local rounded dashboard with light/dark themes, task queue, event timeline, scope view, cancellation, and same-session follow-up.
-- Read-only integration with [Javis603/token-monitor](https://github.com/Javis603/token-monitor) Hub API.
+- Read-only integration with [Javis603/token-monitor](https://github.com/Javis603/token-monitor) Hub API, including cache savings, hit rate, costs, and provider balance/quota data when available.
 
 ## Requirements
 
@@ -47,12 +49,16 @@ The packaged Windows application includes its own runtime. Node.js 20 or newer i
 
 Release artifacts are written to `release`:
 
-- `SolFlash-Relay-0.3.0-x64-setup.exe`: recommended. Installs the desktop application and supports one-click Codex MCP configuration.
-- `SolFlash-Relay-0.3.0-x64-portable.exe`: portable dashboard and background host. The NSIS portable shell cannot reliably forward MCP stdio, so it intentionally refuses to install itself as a Codex MCP server.
+- `SolFlash-Relay-0.4.0-x64-setup.exe`: recommended. Installs the desktop application and supports one-click Codex MCP configuration.
+- `SolFlash-Relay-0.4.0-x64-portable.exe`: portable dashboard and background host. The NSIS portable shell cannot reliably forward MCP stdio, so it intentionally refuses to install itself as a Codex MCP server.
 
 Closing the window hides Relay to the notification area and keeps active Agent tasks hosted. Click the tray icon or start the application again to restore the same instance. Use the tray menu or the power button in settings to terminate Relay and its Agent child processes completely.
 
 From the installed application, open Agent and model settings and click `安装 Codex MCP`. The generated Codex entry uses the installed EXE's bundled Node mode for MCP stdio and starts the same EXE with `--background` whenever the Relay host is not already running. Restart Codex after installation.
+
+Relay is active as soon as the desktop application starts. The activation strip reports whether background hosting and Codex MCP are ready. After MCP installation, click `复制使用指令`, paste it into the Codex project that should act as planner, and describe the implementation goal normally.
+
+Relay deliberately does not own Agent provider credentials. Configure API keys and active providers inside Haha, Claude Code, OpenCode, or the selected Agent. Relay reads the active Haha provider's model mappings, merges them with built-in candidates, and also accepts arbitrary intermediary model IDs such as `sol` or `luna`.
 
 Desktop state and task data are stored under `%APPDATA%\SolFlash Relay\relay-data`.
 
@@ -113,6 +119,8 @@ TOKEN_MONITOR_PROJECT_LABEL=SolFlashRelay
 
 When the Hub is unavailable, the dashboard remains functional and shows Relay's directly captured Haha usage. Once Token Monitor is running, the panel adds project-level Codex/Claude client and model totals.
 
+The dashboard's `缓存节省` value is the number of cache-read tokens reported by Token Monitor. `节省率` divides cache-read tokens by all processed input, output, cache-read, and cache-write tokens; `缓存命中` divides cache-read tokens by cache-eligible input plus cache-read tokens. These are measured cache reuse values, not an invented estimate of what another model might have cost. Provider balance or quota rows appear only when Token Monitor exposes `limits.providers` data.
+
 ## Configuration
 
 Copy `.env.example` to `.env` when defaults do not match the machine.
@@ -147,10 +155,10 @@ npm run test:server
 npm run test:agents
 npm run test:mcp
 npm run test:mcp:packaged
+npm run test:codex-config
 npm run test:token-monitor
 npm run test:ui
 npm run test:desktop
-npm run test:desktop:packaged
 npm run test:e2e
 npm run build
 ```

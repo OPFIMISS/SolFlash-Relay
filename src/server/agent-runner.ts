@@ -121,6 +121,23 @@ export const buildAgentRun = async (
   throw new Error(`Agent ${agent.id} cannot execute tasks (transport: ${agent.transport}).`);
 };
 
+export const discoverHahaModels = async (relayConfig: RelayConfig) => {
+  try {
+    const raw = await readFile(
+      path.join(relayConfig.hahaGlobalConfigDir, "cc-haha", "providers.json"),
+      "utf8",
+    );
+    const parsed = JSON.parse(raw) as {
+      activeId?: string;
+      providers?: Array<{ id?: string; models?: Record<string, string> }>;
+    };
+    const provider = parsed.providers?.find((item) => item.id === parsed.activeId);
+    return [...new Set(Object.values(provider?.models ?? {}).filter(Boolean))];
+  } catch {
+    return [];
+  }
+};
+
 const buildHahaRun = async (
   relayConfig: RelayConfig,
   task: RelayTask,
@@ -236,4 +253,3 @@ const sessionName = (task: RelayTask) =>
 
 const substitute = (value: string, variables: Record<string, string>) =>
   value.replace(/\{(prompt|workdir|sessionId|model|title)\}/g, (_match, key) => variables[key] ?? "");
-

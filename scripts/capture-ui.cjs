@@ -54,6 +54,7 @@ const settings = {
   plannerModel: "gpt-5.6-sol",
   executorAgent: "claude-haha",
   executorModel: "deepseek-v4-flash",
+  executorEffort: "medium",
   agents: [
     { id: "codex", label: "Codex", role: "planner", transport: "host", enabled: true, models: ["gpt-5.6-sol", "gpt-5.6-terra"], defaultModel: "gpt-5.6-sol" },
     { id: "claude-haha", label: "Claude Code Haha", role: "executor", transport: "haha-sidecar", enabled: true, models: ["deepseek-v4-flash", "deepseek-v4-pro"], defaultModel: "deepseek-v4-flash" },
@@ -85,6 +86,7 @@ const monitor = {
   sessions: 9,
   byClient: { codex: 128000, claude: 58420 },
   byModel: { "gpt-5.6-sol": 128000, "deepseek-v4-flash": 58420 },
+  providerLimits: [{ provider: "deepseek", label: "DeepSeek 中转站", used: 12.7, limit: 50, remaining: 37.3, percentage: 25.4, unit: "usd", resetAt: null, plan: "月度余额" }],
   updatedAt: now
 };
 
@@ -100,23 +102,38 @@ async function capture(browser, name, viewport) {
   await page.screenshot({ path: path.join(".relay-data", `ui-${name}.png`), fullPage: true });
   let motion;
   if (name === "desktop") {
-    const before = await page.locator(".segmented-control").evaluate((element) =>
-      getComputedStyle(element, "::before").transform,
-    );
+    const indicator = page.locator(".segment-indicator");
+    const before = await indicator.evaluate((element) => getComputedStyle(element).transform);
     await page.getByRole("button", { name: "本周" }).click();
-    await page.waitForTimeout(420);
-    const after = await page.locator(".segmented-control").evaluate((element) =>
-      getComputedStyle(element, "::before").transform,
-    );
+    await page.waitForTimeout(210);
+    const during = await indicator.evaluate((element) => getComputedStyle(element).transform);
+    await page.waitForTimeout(300);
+    const after = await indicator.evaluate((element) => getComputedStyle(element).transform);
     const contentAnimation = await page.locator(".token-period-content").evaluate((element) =>
       getComputedStyle(element).animationName,
     );
-    if (before === after) throw new Error("Token period indicator did not move");
+    if (before === during || during === after || before === after) {
+      throw new Error(`Token period indicator did not animate continuously: ${before} -> ${during} -> ${after}`);
+    }
     if (contentAnimation === "none") throw new Error("Token period content animation is missing");
-    motion = { before, after, contentAnimation };
+    motion = { before, during, after, contentAnimation };
+    await page.waitForTimeout(500);
     await page.screenshot({ path: path.join(".relay-data", "ui-period-week.png"), fullPage: true });
     await page.getByTitle("Agent 与模型设置").click();
     await page.waitForSelector(".settings-dialog");
+    await page.waitForTimeout(350);
+    const executorSettings = page.locator("fieldset").filter({ hasText: "执行端" });
+    const executorSelects = executorSettings.locator("select");
+    const modelOptions = await executorSelects.nth(1).locator("option").allTextContents();
+    if (!modelOptions.includes("deepseek-v4-flash") || !modelOptions.includes("deepseek-v4-pro")) {
+      throw new Error(`Executor model selector is incomplete: ${modelOptions.join(", ")}`);
+    }
+    await executorSelects.nth(1).selectOption("deepseek-v4-pro");
+    await executorSelects.nth(2).selectOption("high");
+    await executorSelects.nth(1).selectOption("__custom");
+    const customModel = executorSettings.locator(".model-field input");
+    await customModel.fill("luna-code-preview");
+    if ((await customModel.inputValue()) !== "luna-code-preview") throw new Error("Custom intermediary model ID was not accepted");
     await page.screenshot({ path: path.join(".relay-data", "ui-settings.png"), fullPage: true });
     await page.getByTitle("关闭").click();
   }

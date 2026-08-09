@@ -93,7 +93,7 @@ const waitForDaemon = async () => {
   throw new Error(`Relay daemon did not start at ${relayUrl}`);
 };
 
-const server = new McpServer({ name: "sol-flash-relay", version: "0.3.0" });
+const server = new McpServer({ name: "sol-flash-relay", version: "0.4.0" });
 
 const startSchema = {
   title: z.string().min(1),
@@ -174,6 +174,7 @@ server.registerTool(
       plannerModel: z.string(),
       executorAgent: z.string().min(1),
       executorModel: z.string(),
+      executorEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
     },
     annotations: { destructiveHint: false, openWorldHint: false },
   },

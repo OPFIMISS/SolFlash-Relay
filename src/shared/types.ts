@@ -56,7 +56,20 @@ export interface RelaySettings {
   plannerModel: string;
   executorAgent: string;
   executorModel: string;
+  executorEffort: "low" | "medium" | "high" | "xhigh" | "max";
   agents: AgentDefinition[];
+}
+
+export interface ProviderLimitSummary {
+  provider: string;
+  label: string;
+  used: number;
+  limit: number;
+  remaining: number;
+  percentage: number;
+  unit: string;
+  resetAt: string | null;
+  plan: string | null;
 }
 
 export interface RelayUsage {
@@ -123,5 +136,6 @@ export interface TokenMonitorSummary {
   sessions: number;
   byClient: Record<string, number>;
   byModel: Record<string, number>;
+  providerLimits: ProviderLimitSummary[];
   updatedAt: string | null;
 }

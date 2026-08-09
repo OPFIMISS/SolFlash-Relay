@@ -3,18 +3,22 @@ import {
   Bot,
   Cable,
   Check,
+  CircleCheckBig,
   CircleDollarSign,
   CircleStop,
   Clock3,
   Code2,
   Cpu,
+  Copy,
   FileCode2,
   Gauge,
   GitCompareArrows,
   Moon,
+  Percent,
   Power,
   Radio,
   RefreshCw,
+  Rocket,
   Send,
   Server,
   Settings2,
@@ -22,6 +26,7 @@ import {
   Sun,
   TerminalSquare,
   TriangleAlert,
+  WalletCards,
   WifiOff,
   X,
   Zap,
@@ -67,8 +72,11 @@ const emptyMonitor: TokenMonitorSummary = {
   sessions: 0,
   byClient: {},
   byModel: {},
+  providerLimits: [],
   updatedAt: null,
 };
+
+type DesktopStatus = Awaited<ReturnType<NonNullable<Window["relayDesktop"]>["getStatus"]>>;
 
 const statusLabels: Record<RelayTaskStatus, string> = {
   queued: "排队中",
@@ -116,6 +124,7 @@ export function App() {
   const [settingsDraft, setSettingsDraft] = useState<RelaySettings | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [desktopMessage, setDesktopMessage] = useState<string | null>(null);
+  const [desktopStatus, setDesktopStatus] = useState<DesktopStatus | null>(null);
   const [period, setPeriod] = useState("today");
   const [theme, setTheme] = useState<"light" | "dark">(() =>
     localStorage.getItem("relay-theme") === "dark" ? "dark" : "light",
@@ -166,6 +175,10 @@ export function App() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("relay-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    void window.relayDesktop?.getStatus().then(setDesktopStatus).catch(() => undefined);
+  }, []);
 
   const selected = tasks.find((task) => task.id === selectedId) ?? tasks[0] ?? null;
   const activeCount = tasks.filter((task) => task.status === "running").length;
@@ -230,11 +243,17 @@ export function App() {
     setBusy(true);
     try {
       setDesktopMessage(await window.relayDesktop.installMcp());
+      setDesktopStatus(await window.relayDesktop.getStatus());
     } catch (nextError) {
       setDesktopMessage(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
       setBusy(false);
     }
+  };
+
+  const copyUsagePrompt = async () => {
+    if (!window.relayDesktop) return;
+    setDesktopMessage(await window.relayDesktop.copyUsagePrompt());
   };
 
   const planner = settings?.agents.find((agent) => agent.id === settings.plannerAgent);
@@ -292,6 +311,30 @@ export function App() {
             <X size={17} />
           </button>
         </div>
+      )}
+
+      {desktopStatus && (
+        <section className="activation-strip" aria-label="Relay 开启状态">
+          <div className="activation-icon"><Rocket size={19} /></div>
+          <div className="activation-copy">
+            <strong>Relay 后台托管已开启</strong>
+            <span>{desktopStatus.mcpInstalled
+              ? "Codex MCP 已安装。现在可以在 Codex 中复制指令并派发第一个任务。"
+              : desktopStatus.canInstallMcp
+                ? "还差一步：安装 Codex MCP，然后重启 Codex。"
+                : "便携版可托管后台；Codex MCP 请使用 Setup 安装版。"}</span>
+          </div>
+          <span className={`activation-state ${desktopStatus.mcpInstalled ? "ready" : "waiting"}`}>
+            {desktopStatus.mcpInstalled ? <CircleCheckBig size={15} /> : <Cable size={15} />}
+            {desktopStatus.mcpInstalled ? "已可用" : "待接入"}
+          </span>
+          <div className="activation-actions">
+            {!desktopStatus.mcpInstalled && desktopStatus.canInstallMcp && (
+              <button className="secondary-button" disabled={busy} onClick={() => void installDesktopMcp()}><Cable size={16} />安装 MCP</button>
+            )}
+            <button className="primary-button" onClick={() => void copyUsagePrompt()}><Copy size={16} />复制使用指令</button>
+          </div>
+        </section>
       )}
 
       <main className="dashboard-grid">
@@ -416,7 +459,8 @@ export function App() {
           ) : (
             <div className="empty-state detail-empty">
               <TerminalSquare size={28} />
-              <strong>尚无任务详情</strong>
+              <strong>Relay 已开启，等待 Codex 派发任务</strong>
+              <span>安装 MCP 后，在 Codex 中粘贴上方使用指令即可开始</span>
             </div>
           )}
         </section>
@@ -506,8 +550,7 @@ function SettingsDialog({
               {planners.map((agent) => <option key={agent.id} value={agent.id}>{agent.label}</option>)}
             </select>
             <label>模型</label>
-            <input list="planner-models" value={settings.plannerModel} onChange={(event) => onChange({ ...settings, plannerModel: event.target.value })} />
-            <datalist id="planner-models">{planner?.models.map((model) => <option key={model} value={model} />)}</datalist>
+            <ModelField models={planner?.models ?? []} value={settings.plannerModel} onChange={(plannerModel) => onChange({ ...settings, plannerModel })} />
           </fieldset>
           <fieldset>
             <legend>执行端</legend>
@@ -519,8 +562,15 @@ function SettingsDialog({
               {executors.map((agent) => <option key={agent.id} value={agent.id}>{agent.label}</option>)}
             </select>
             <label>模型</label>
-            <input list="executor-models" value={settings.executorModel} onChange={(event) => onChange({ ...settings, executorModel: event.target.value })} />
-            <datalist id="executor-models">{executor?.models.map((model) => <option key={model} value={model} />)}</datalist>
+            <ModelField models={executor?.models ?? []} value={settings.executorModel} onChange={(executorModel) => onChange({ ...settings, executorModel })} />
+            <label>思考强度</label>
+            <select value={settings.executorEffort} onChange={(event) => onChange({ ...settings, executorEffort: event.target.value as RelaySettings["executorEffort"] })}>
+              <option value="low">低</option>
+              <option value="medium">中</option>
+              <option value="high">高</option>
+              <option value="xhigh">超高</option>
+              <option value="max">最大</option>
+            </select>
           </fieldset>
         </div>
         {desktopMessage && <div className="desktop-message">{desktopMessage}</div>}
@@ -535,6 +585,20 @@ function SettingsDialog({
           </div>
         </footer>
       </section>
+    </div>
+  );
+}
+
+function ModelField({ models, value, onChange }: { models: string[]; value: string; onChange: (value: string) => void }) {
+  const options = [...new Set(models.filter(Boolean))];
+  const known = options.includes(value);
+  return (
+    <div className="model-field">
+      <select value={known ? value : "__custom"} onChange={(event) => onChange(event.target.value === "__custom" ? "" : event.target.value)}>
+        {options.map((model) => <option key={model} value={model}>{model}</option>)}
+        <option value="__custom">自定义模型 ID…</option>
+      </select>
+      {!known && <input value={value} onChange={(event) => onChange(event.target.value)} placeholder="例如 sol、luna 或中转站模型 ID" />}
     </div>
   );
 }
@@ -628,6 +692,10 @@ function TokenMonitorCard({ monitor, period, onPeriod }: { monitor: TokenMonitor
     { name: "缓存读取", value: monitor.cacheReadTokens },
     { name: "缓存写入", value: monitor.cacheCreationTokens },
   ].filter((item) => item.value > 0), [monitor]);
+  const processedTokens = monitor.inputTokens + monitor.outputTokens + monitor.cacheReadTokens + monitor.cacheCreationTokens;
+  const cacheEligibleTokens = monitor.inputTokens + monitor.cacheReadTokens;
+  const savingsRate = processedTokens > 0 ? monitor.cacheReadTokens / processedTokens : 0;
+  const cacheHitRate = cacheEligibleTokens > 0 ? monitor.cacheReadTokens / cacheEligibleTokens : 0;
 
   return (
     <section className="token-section">
@@ -637,6 +705,7 @@ function TokenMonitorCard({ monitor, period, onPeriod }: { monitor: TokenMonitor
       </div>
 
       <div className="segmented-control" data-period={period} aria-label="统计周期">
+        <span className="segment-indicator" aria-hidden="true" />
         {[{ id: "today", label: "今日" }, { id: "week", label: "本周" }, { id: "month", label: "本月" }].map((item) => (
           <button key={item.id} className={period === item.id ? "active" : ""} onClick={() => onPeriod(item.id)}>{item.label}</button>
         ))}
@@ -669,15 +738,39 @@ function TokenMonitorCard({ monitor, period, onPeriod }: { monitor: TokenMonitor
           <SummaryValue label="会话" value={String(monitor.sessions)} />
         </div>
 
+        <div className="efficiency-grid">
+          <SummaryValue label="缓存节省" value={formatTokens(monitor.cacheReadTokens)} accent />
+          <SummaryValue label="节省率" value={`${(savingsRate * 100).toFixed(1)}%`} />
+          <SummaryValue label="缓存命中" value={`${(cacheHitRate * 100).toFixed(1)}%`} />
+          <SummaryValue label="实际处理" value={formatTokens(processedTokens)} />
+        </div>
+
         {!monitor.connected && (
           <div className="monitor-offline"><WifiOff size={16} /><span>{monitor.error ?? "等待 Token Monitor Hub"}</span></div>
         )}
 
         {data.length > 0 && <div className="legend-list">{data.map((item, index) => <div key={item.name}><i style={{ background: tokenColors[index % tokenColors.length] }} /><span>{item.name}</span><strong>{formatTokens(item.value)}</strong></div>)}</div>}
+
+        <div className="balance-section">
+          <div className="balance-heading"><WalletCards size={15} /><strong>余额与额度</strong></div>
+          {monitor.providerLimits.length > 0 ? monitor.providerLimits.map((limit) => (
+            <div className="balance-row" key={limit.provider}>
+              <div><strong>{limit.label}</strong><span>{limit.plan ?? limit.unit}</span></div>
+              <div className="balance-value"><strong>{formatQuota(limit.remaining, limit.unit)}</strong><span>剩余</span></div>
+              <div className="quota-track"><i style={{ width: `${Math.max(0, Math.min(100, 100 - limit.percentage))}%` }} /></div>
+            </div>
+          )) : <div className="balance-empty">Token Monitor 尚未提供中转站余额或额度数据</div>}
+        </div>
       </div>
     </section>
   );
 }
+
+const formatQuota = (value: number, unit: string) => {
+  if (/usd|dollar|\$/i.test(unit)) return formatCost(value);
+  if (/token/i.test(unit)) return `${formatTokens(value)} Token`;
+  return `${Number.isInteger(value) ? value : value.toFixed(2)} ${unit === "quota" ? "额度" : unit}`;
+};
 
 function SummaryValue({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) {
   return <div className={`summary-value ${accent ? "accent" : ""}`}><small>{label}</small><strong>{value}</strong></div>;

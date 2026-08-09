@@ -25,6 +25,7 @@ const transport = new StdioClientTransport({
     RELAY_DESKTOP_CWD: path.dirname(executable),
     RELAY_PORT: String(port),
     RELAY_DATA_DIR: testDataDir,
+    RELAY_USER_DATA_DIR: path.join(projectRoot, ".relay-data", "packaged-mcp-user-data"),
   },
   stderr: "pipe",
 });
@@ -35,7 +36,7 @@ transport.stderr?.on("data", (chunk) => {
   process.stderr.write(value);
 });
 
-const client = new Client({ name: "relay-packaged-test", version: "0.3.0" });
+const client = new Client({ name: "relay-packaged-test", version: "0.4.0" });
 
 async function withTimeout(promise, label, timeoutMs = 20000) {
   let timer;
