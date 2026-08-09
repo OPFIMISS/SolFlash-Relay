@@ -7,6 +7,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import * as z from "zod/v4";
 
 import type { RelaySettings, RelayTask, RelayTaskRequest } from "../shared/types.js";
+import { relayVersion } from "./config.js";
+import { isTerminal } from "./task-store.js";
 
 const host = process.env.RELAY_HOST ?? "127.0.0.1";
 const port = Number(process.env.RELAY_PORT ?? 17322);
@@ -56,10 +58,17 @@ const requestJson = async <T>(route: string, init?: RequestInit): Promise<T> => 
 };
 
 const waitForDaemon = async () => {
+  let shouldStart = false;
   try {
-    await requestJson("/api/health");
-    return;
-  } catch {
+    const health = await requestJson<{ version?: string }>("/api/health");
+    if (health.version === relayVersion) return;
+    throw new Error(`Relay version mismatch: MCP ${relayVersion}, daemon ${health.version ?? "legacy"}.`);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Relay version mismatch:")) throw error;
+    shouldStart = true;
+  }
+
+  if (shouldStart) {
     const desktopExecutable = process.env.RELAY_DESKTOP_EXECUTABLE;
     const currentDir = path.dirname(fileURLToPath(import.meta.url));
     const daemonPath = path.join(currentDir, "daemon.js");
@@ -84,8 +93,8 @@ const waitForDaemon = async () => {
   for (let attempt = 0; attempt < 25; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 200));
     try {
-      await requestJson("/api/health");
-      return;
+      const health = await requestJson<{ version?: string }>("/api/health");
+      if (health.version === relayVersion) return;
     } catch {
       // Keep waiting for the detached daemon.
     }
@@ -93,7 +102,7 @@ const waitForDaemon = async () => {
   throw new Error(`Relay daemon did not start at ${relayUrl}`);
 };
 
-const server = new McpServer({ name: "sol-flash-relay", version: "0.4.0" });
+const server = new McpServer({ name: "sol-flash-relay", version: relayVersion });
 
 const startSchema = {
   title: z.string().min(1),
@@ -145,6 +154,46 @@ server.registerTool(
     annotations: { destructiveHint: true, openWorldHint: false },
   },
   startTask,
+);
+
+server.registerTool(
+  "agent_run",
+  {
+    title: "Run implementation agent and wait",
+    description:
+      "Start a bounded execution-Agent task and keep this tool call open until the Agent returns a final reply. Prefer this when the planner must automatically receive completion without manually polling flash_wait.",
+    inputSchema: {
+      ...startSchema,
+      timeoutSeconds: z.number().int().min(30).max(3600).default(900),
+    },
+    annotations: { destructiveHint: true, openWorldHint: false },
+  },
+  async ({ timeoutSeconds, ...request }) => {
+    try {
+      let task = await requestJson<RelayTask>("/api/tasks", {
+        method: "POST",
+        body: JSON.stringify(request),
+      });
+      const deadline = Date.now() + timeoutSeconds * 1000;
+      while (!isTerminal(task.status) && Date.now() < deadline) {
+        const query = new URLSearchParams({
+          afterUpdatedAt: task.updatedAt,
+          timeoutSeconds: String(Math.min(60, Math.max(1, Math.ceil((deadline - Date.now()) / 1000)))),
+        });
+        task = await requestJson<RelayTask>(`/api/tasks/${task.id}/wait?${query}`);
+      }
+      if (!isTerminal(task.status)) {
+        return textResult({
+          ...conciseTask(task),
+          timedOut: true,
+          next: "Call flash_wait with this task ID; the execution Agent is still running.",
+        });
+      }
+      return textResult(conciseTask(task), task.status === "failed");
+    } catch (error) {
+      return textResult({ error: error instanceof Error ? error.message : String(error) }, true);
+    }
+  },
 );
 
 server.registerTool(

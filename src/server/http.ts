@@ -6,7 +6,7 @@ import express from "express";
 
 import type { AgentDefinition, RelaySettings, RelayTaskRequest } from "../shared/types.js";
 import { discoverHahaModels } from "./agent-runner.js";
-import { publicConfig, type RelayConfig } from "./config.js";
+import { publicConfig, relayVersion, type RelayConfig } from "./config.js";
 import { TaskManager } from "./task-manager.js";
 import { TaskStore } from "./task-store.js";
 import { TokenMonitorClient } from "./token-monitor.js";
@@ -23,7 +23,7 @@ export const startHttpServer = (
   app.use(express.json({ limit: "1mb" }));
 
   app.get("/api/health", (_request, response) => {
-    response.json({ ok: true, now: new Date().toISOString() });
+    response.json({ ok: true, version: relayVersion, now: new Date().toISOString() });
   });
   app.get("/api/config", (_request, response) => response.json(publicConfig(relayConfig)));
   app.get("/api/settings", async (_request, response) => {
@@ -104,6 +104,12 @@ export const startHttpServer = (
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  });
+  app.post("/api/tasks/:id/read", async (request, response) => {
+    const task = manager.get(request.params.id);
+    if (!task) return response.status(404).json({ error: "Task not found" });
+    task.unread = false;
+    return response.json(await store.set(task));
   });
   app.get("/api/token-monitor", async (request, response) => {
     response.json(

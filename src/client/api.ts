@@ -34,3 +34,22 @@ export const sendFollowUp = (taskId: string, instruction: string) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ instruction }),
   }).then(json<RelayTask>);
+export const markTaskRead = (taskId: string) =>
+  fetch(`/api/tasks/${taskId}/read`, { method: "POST" }).then(json<RelayTask>);
+export const startVisibleFlashCheck = (workdir: string) =>
+  fetch("/api/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: "Visible Flash self-check",
+      objective: "Create .relay-data/visible-flash-proof/output.txt containing exactly FLASH_VISIBLE_OK, then reply with exactly FLASH_VISIBLE_OK.",
+      workdir,
+      allowedFiles: [".relay-data/visible-flash-proof/output.txt"],
+      constraints: ["Do not modify any other file.", "Do not run package managers or tests."],
+      plannerAgent: "codex",
+      plannerModel: "gpt-5.6-sol",
+      executorAgent: "claude-haha",
+      model: "deepseek-v4-flash",
+      effort: "low",
+    }),
+  }).then(json<RelayTask>);

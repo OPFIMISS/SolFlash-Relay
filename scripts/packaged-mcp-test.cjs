@@ -36,7 +36,7 @@ transport.stderr?.on("data", (chunk) => {
   process.stderr.write(value);
 });
 
-const client = new Client({ name: "relay-packaged-test", version: "0.4.0" });
+const client = new Client({ name: "relay-packaged-test", version: "0.5.0" });
 
 async function withTimeout(promise, label, timeoutMs = 20000) {
   let timer;
@@ -76,7 +76,9 @@ async function stopTestDaemon() {
   try {
     const result = await withTimeout(client.listTools(), "portable MCP listTools");
     const names = result.tools.map((tool) => tool.name).sort();
-    if (names.length !== 10) throw new Error(`Expected 10 MCP tools, received ${names.length}`);
+    if (names.length !== 11 || !names.includes("agent_run")) {
+      throw new Error(`Expected 11 MCP tools including agent_run, received: ${names.join(", ")}`);
+    }
 
     const health = await withTimeout(fetch(`${relayUrl}/api/health`), "portable daemon health");
     if (!health.ok) throw new Error(`Portable daemon health returned ${health.status}`);

@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { AgentDefinition, RelaySettings } from "../shared/types.js";
@@ -95,12 +95,13 @@ export class SettingsStore {
 
   async save(next: RelaySettings) {
     this.#settings = normalizeSettings(next);
-    const temporary = `${this.#filePath}.tmp`;
+    const temporary = `${this.#filePath}.${process.pid}.tmp`;
     await writeFile(
       temporary,
       JSON.stringify({ version: 1, settings: this.#settings }, null, 2),
       "utf8",
     );
+    await rm(this.#filePath, { force: true });
     await rename(temporary, this.#filePath);
     return this.get();
   }

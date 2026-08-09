@@ -1,8 +1,8 @@
 import { EventEmitter } from "node:events";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { RelayEvent, RelayTask } from "../shared/types.js";
+import type { AgentConversationMessage, RelayEvent, RelayTask } from "../shared/types.js";
 
 interface PersistedState {
   version: 1;
@@ -32,6 +32,8 @@ export class TaskStore extends EventEmitter {
         task.requestedModel ??= task.request.model ?? "deepseek-v4-flash";
         task.effectiveModel ??= task.usage.model;
         task.modelWarning ??= null;
+        task.unread ??= false;
+        task.messages ??= migrateMessages(task);
         if (task.status === "running" || task.status === "waiting") {
           task.status = "failed";
           task.error = "Relay restarted while this task was active.";
@@ -73,6 +75,16 @@ export class TaskStore extends EventEmitter {
     return task;
   }
 
+  async appendMessage(taskId: string, message: AgentConversationMessage) {
+    const task = this.#tasks.get(taskId);
+    if (!task) return null;
+    task.messages = [...task.messages, message].slice(-200);
+    task.updatedAt = message.timestamp;
+    await this.#persist();
+    this.emit("task", task);
+    return task;
+  }
+
   waitForUpdate(taskId: string, afterUpdatedAt: string, timeoutMs: number) {
     const current = this.get(taskId);
     if (!current) return Promise.resolve(null);
@@ -103,8 +115,9 @@ export class TaskStore extends EventEmitter {
       .catch(() => undefined)
       .then(async () => {
         const state: PersistedState = { version: 1, tasks: this.list() };
-        const temporary = `${this.#filePath}.tmp`;
+        const temporary = `${this.#filePath}.${process.pid}.tmp`;
         await writeFile(temporary, JSON.stringify(state, null, 2), "utf8");
+        await rm(this.#filePath, { force: true });
         await rename(temporary, this.#filePath);
       });
     await this.#persistQueue;
@@ -113,3 +126,27 @@ export class TaskStore extends EventEmitter {
 
 export const isTerminal = (status: RelayTask["status"]) =>
   status === "completed" || status === "failed" || status === "cancelled";
+
+const migrateMessages = (task: RelayTask): AgentConversationMessage[] => {
+  const messages: AgentConversationMessage[] = [{
+    id: `migrated-planner-${task.id}`,
+    role: "planner",
+    agent: task.request.plannerAgent ?? "codex",
+    model: task.request.plannerModel ?? "gpt-5.6-sol",
+    timestamp: task.createdAt,
+    content: task.request.objective,
+    kind: "instruction",
+  }];
+  if (task.summary) {
+    messages.push({
+      id: `migrated-executor-${task.id}`,
+      role: "executor",
+      agent: task.request.executorAgent ?? "claude-haha",
+      model: task.effectiveModel ?? task.requestedModel,
+      timestamp: task.finishedAt ?? task.updatedAt,
+      content: task.summary,
+      kind: task.status === "failed" ? "error" : "result",
+    });
+  }
+  return messages;
+};

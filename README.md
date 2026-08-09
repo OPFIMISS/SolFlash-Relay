@@ -1,115 +1,90 @@
 # SolFlash Relay
 
-Current version: `0.4.0`.
+**中文** | [English](#english)
 
-SolFlash Relay is a local, model-free control plane for delegating bounded implementation work between configurable planning and execution Agents.
+当前版本 / Current version: `0.5.0`<br>
+Windows 10/11 · MIT License · Local-first · MCP
 
-It does not proxy model APIs, synchronize full conversations, or add a third planning model. Each Agent keeps its own login, provider configuration, and native conversation storage. Relay transports structured tasks, binds the executor to the planner's project path, streams activity, records usage, and returns compact results to the planner.
+SolFlash Relay 是一个本地多 Agent 编程控制面：让 Codex / Sol 负责规划、架构、UI 与最终审查，再把边界明确的代码实现交给 Claude Code Haha / DeepSeek Flash 或其他执行 Agent。
 
-## Architecture
+它不接管 API Key，不转发模型 API，也不把第三个模型塞进链路。每个 Agent 继续使用自己的登录、Provider、模型配置和原生对话记录；Relay 只负责结构化派发、同项目路径绑定、进度监控、结果回传与用量审计。
+
+[下载 Windows EXE / Download](https://github.com/OPFIMISS/SolFlash-Relay-/releases/latest) · [问题反馈 / Issues](https://github.com/OPFIMISS/SolFlash-Relay-/issues)
+
+![SolFlash Relay 项目对话与用量面板](docs/images/dashboard.png)
+
+## 为什么需要它
+
+- **Sol 做上级，Flash 做执行**：策划 Agent 决定架构与验收范围，执行 Agent 只完成明确的机械实现。
+- **保留原生 Agent 体验**：Haha 任务使用与 Codex 相同的绝对项目路径，并保留在 Haha 的可见项目会话中。
+- **A 自动收到 B 的结果**：`agent_run` 会等待执行 Agent 的最终回复并直接返回给策划 Agent；异步任务仍可使用 `agent_start`、`flash_wait` 和 `flash_send`。
+- **一个任务，两段对话**：工作台按项目路径聚合任务，上方显示 A 的初始指令与返工，下方显示 B 的过程和最终回复。
+- **后台托管与通知**：关闭窗口后继续在托盘运行；任务完成或失败时发送 Windows 通知，并显示任务栏未读 `1` 角标。
+- **模型可核验**：同时记录请求模型、Haha CLI 实际接收的模型别名和 Provider 回报的有效模型；空回复不再被误判为完成。
+- **费用与 Token**：显示输入、输出、缓存读取、缓存写入、成本、缓存节省率、命中率，以及 Token Monitor 提供的余额或额度。
+- **自由切换 Agent**：内置 Codex、Claude Code Haha、Claude Code CLI、OpenCode、Reasonix 适配器，并支持无凭据的自定义 CLI 描述。
+
+## 0.5.0 重点更新
+
+- 新增同步 `agent_run` MCP 工具，让 Sol 在一次工具调用中等待执行结果。
+- 新增可见 Flash 自检，明确强制 `deepseek-v4-flash`，并校验真实回复、有效模型和证明文件。
+- 新增 Windows 系统通知、任务栏未读角标、点击通知打开对应任务、聚焦后清除未读。
+- 新增按绝对路径分组的项目工作台，以及 A / B 上下双 Agent 对话。
+- 检测旧 Relay 占用端口，避免新版 UI 意外连接旧版 daemon。
+- 修复 Windows 状态文件替换偶发 `EPERM` 导致任务已执行但结果无法持久化的问题。
+
+## 界面
+
+| Agent 与模型设置 | 移动端布局 |
+| --- | --- |
+| ![Agent 与模型设置](docs/images/agent-settings.png) | ![移动端布局](docs/images/mobile.png) |
+
+设置页可以切换主策划 Agent / 模型、执行 Agent / 模型、思考强度，也可以填写中转站提供的任意模型 ID，例如 `sol`、`luna` 或其他自定义名称。Relay 不保存或管理这些 Agent 的 API Key。
+
+## 工作方式
 
 ```mermaid
 flowchart LR
-    U[User] --> S[Planning Agent]
-    S -->|MCP tools| P[Relay MCP proxy]
-    P --> D[Relay daemon]
-    D -->|Selected adapter| F[Execution Agent]
-    F -->|JSONL or text| D
-    D --> W[Local dashboard]
-    D -->|summary, diff, model, usage| S
-    T[Token Monitor Hub] -->|read-only API| D
+    U["用户"] --> A["策划 Agent A"]
+    A -->|"MCP: agent_run / agent_start"| R["SolFlash Relay"]
+    R -->|"同一绝对项目路径"| B["执行 Agent B"]
+    B -->|"过程、回复、模型、用量"| R
+    R -->|"最终结果与通知"| A
+    T["Token Monitor Hub"] -->|"只读统计"| R
 ```
 
-## Current capabilities
+1. Sol 检查代码库并决定架构、UI、文件范围和验收命令。
+2. Sol 调用 `agent_run`，传入当前项目的绝对路径、`allowedFiles`、约束和指定执行模型。
+3. Relay 在同一路径创建 Haha 或其他执行 Agent 会话，并持续记录工具调用和输出。
+4. B 完成后，Relay 通知用户并把最终回复直接交还 A。
+5. Sol 审查真实 Git diff 并运行测试；需要修正时，用 `flash_send` 恢复同一执行会话。
 
-- Generic `agent_start`, profile selection, adapter registration, and backward-compatible `flash_*` MCP tools.
-- Switchable planning Agent/model and execution Agent/model defaults from the dashboard or MCP.
-- Complete model selectors for built-in choices, editable custom intermediary model IDs, and a persisted default execution effort.
-- Built-in adapters for Claude Code Haha, Claude Code CLI, OpenCode, and Reasonix, plus credential-free custom CLI manifests.
-- Persistent executor session IDs with same-session follow-up when the selected Agent supports resume.
-- The executor always receives the exact absolute project path supplied by the planner. Haha desktop sessions are grouped under that same project.
-- Existing provider credentials remain managed by their owning Agent. Relay never returns them through MCP or the dashboard.
-- Haha model IDs are resolved through its active provider slots and checked against the effective model returned by the run.
-- Live task events, tool calls, summaries, model usage, token counts, and cost.
-- Visible activation state, one-click MCP installation, and a copyable Codex delegation instruction.
-- Before/after Git status and content hashes with warnings for files outside `allowedFiles`.
-- Local rounded dashboard with light/dark themes, task queue, event timeline, scope view, cancellation, and same-session follow-up.
-- Read-only integration with [Javis603/token-monitor](https://github.com/Javis603/token-monitor) Hub API, including cache savings, hit rate, costs, and provider balance/quota data when available.
+## Windows 安装
 
-## Requirements
+推荐从 [Releases](https://github.com/OPFIMISS/SolFlash-Relay-/releases) 下载：
 
-- Windows 10/11.
-- Claude Code Haha installed and already able to use the desired provider.
-- Codex desktop/CLI with local MCP support.
-- Optional: Token Monitor Hub listening on port `17321`.
+- `SolFlash-Relay-0.5.0-x64-setup.exe`：推荐版本，支持后台托管和一键安装 Codex MCP。
+- `SolFlash-Relay-0.5.0-x64-portable.exe`：便携控制台与后台宿主；由于便携外壳不能稳定转发 MCP stdio，不提供一键 MCP 安装。
 
-The packaged Windows application includes its own runtime. Node.js 20 or newer is only required for source development.
+安装版使用步骤：
 
-## Windows application
+1. 启动 SolFlash Relay。
+2. 打开右上角“Agent 与模型”，确认执行端为 `Claude Code Haha` 和 `deepseek-v4-flash`。
+3. 点击“安装 Codex MCP”，然后重启 Codex。
+4. 点击“复制使用指令”，在需要作为策划端的 Codex 项目中粘贴并描述任务。
+5. 首次使用可在已有项目任务上点击“验证当前项目的 Flash”，它会产生一次很小的真实模型调用。
 
-Release artifacts are written to `release`:
+关闭窗口只会隐藏到托盘。要彻底停止 Relay，请使用托盘菜单“退出”或设置页电源按钮。
 
-- `SolFlash-Relay-0.4.0-x64-setup.exe`: recommended. Installs the desktop application and supports one-click Codex MCP configuration.
-- `SolFlash-Relay-0.4.0-x64-portable.exe`: portable dashboard and background host. The NSIS portable shell cannot reliably forward MCP stdio, so it intentionally refuses to install itself as a Codex MCP server.
+## 关于 Pro、Flash 与 `Unknown skill: usage`
 
-Closing the window hides Relay to the notification area and keeps active Agent tasks hosted. Click the tray icon or start the application again to restore the same instance. Use the tray menu or the power button in settings to terminate Relay and its Agent child processes completely.
+Haha 输入框底部显示的是**当前所选 Haha 会话**的模型。Relay 发起的任务会显式传递请求模型，并在任务详情中显示最终有效模型。
 
-From the installed application, open Agent and model settings and click `安装 Codex MCP`. The generated Codex entry uses the installed EXE's bundled Node mode for MCP stdio and starts the same EXE with `--background` whenever the Relay host is not already running. Restart Codex after installation.
+如果 Haha 中出现大量名为 `Unknown skill: usage` 的会话，它们不是 Relay 创建的任务。Token Monitor `0.42.1` 会定期向 Haha 发送 `/usage` 探测，该探测继承 Haha 的全局默认模型，因此可能显示 Pro 且没有模型回复。Relay 的自检会以 `Visible Flash self-check` 命名，便于区分。
 
-Relay is active as soon as the desktop application starts. The activation strip reports whether background hosting and Codex MCP are ready. After MCP installation, click `复制使用指令`, paste it into the Codex project that should act as planner, and describe the implementation goal normally.
+## Token Monitor 接入
 
-Relay deliberately does not own Agent provider credentials. Configure API keys and active providers inside Haha, Claude Code, OpenCode, or the selected Agent. Relay reads the active Haha provider's model mappings, merges them with built-in candidates, and also accepts arbitrary intermediary model IDs such as `sol` or `luna`.
-
-Desktop state and task data are stored under `%APPDATA%\SolFlash Relay\relay-data`.
-
-## Source install
-
-```powershell
-npm install
-npm run build
-& .\scripts\install-codex-mcp.ps1
-```
-
-Restart Codex after installing the MCP entry. The MCP proxy checks the daemon and starts it automatically when needed.
-
-Open the dashboard manually:
-
-```powershell
-& .\scripts\start-relay.ps1
-```
-
-Dashboard: `http://127.0.0.1:17322`
-
-## Codex workflow
-
-Ask the planning Agent to keep architecture and review responsibility:
-
-```text
-Use SolFlash Relay. Decide the architecture and UI first, then call agent_start
-with the absolute path of this current project and narrow allowedFiles. Wait for
-the executor, review the actual diff and tests, and use flash_send only for a
-targeted follow-up in the same session.
-```
-
-The intended sequence is:
-
-1. The planner inspects the current repository and makes design decisions.
-2. It calls `agent_start` with the current project's absolute path, a bounded objective, file allowlist, constraints, and acceptance commands.
-3. Relay launches the selected executor in that exact directory and streams activity to the dashboard.
-4. The planner waits for completion, reviews the real Git diff, and runs verification.
-5. It sends at most two targeted repair attempts. The same executor session is resumed when supported.
-
-## Agent Adapter Skill
-
-The bundled `.agents/skills/agent-adapter` skill guides an AI through integrating another local Agent without moving credentials. Install it into another project with:
-
-```powershell
-& .\scripts\install-agent-skill.ps1 -TargetProject "D:\path\to\project"
-```
-
-## Token Monitor integration
-
-Token Monitor is not modified or bundled. Relay reads its documented Hub API.
+Relay 只读接入 [Javis603/token-monitor](https://github.com/Javis603/token-monitor) Hub API，不修改也不捆绑 Token Monitor。
 
 ```dotenv
 TOKEN_MONITOR_URL=http://127.0.0.1:17321
@@ -117,60 +92,76 @@ TOKEN_MONITOR_SECRET=
 TOKEN_MONITOR_PROJECT_LABEL=SolFlashRelay
 ```
 
-When the Hub is unavailable, the dashboard remains functional and shows Relay's directly captured Haha usage. Once Token Monitor is running, the panel adds project-level Codex/Claude client and model totals.
+Token Monitor 不可用时，Relay 仍可显示执行 Agent 直接回报的 Token 与成本；Provider 余额或额度只在 Hub API 实际提供对应字段时显示。
 
-The dashboard's `缓存节省` value is the number of cache-read tokens reported by Token Monitor. `节省率` divides cache-read tokens by all processed input, output, cache-read, and cache-write tokens; `缓存命中` divides cache-read tokens by cache-eligible input plus cache-read tokens. These are measured cache reuse values, not an invented estimate of what another model might have cost. Provider balance or quota rows appear only when Token Monitor exposes `limits.providers` data.
-
-## Configuration
-
-Copy `.env.example` to `.env` when defaults do not match the machine.
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `RELAY_PORT` | `17322` | Dashboard and daemon API port |
-| `RELAY_DATA_DIR` | `.relay-data` | Task and event state |
-| `HAHA_ROOT` | `D:\Claude Code Haha` | Haha installation directory |
-| `HAHA_GLOBAL_CONFIG_DIR` | `%USERPROFILE%\.claude` | Existing Haha-owned configuration |
-| `HAHA_STATE_DIR` | `.relay-data/haha-state` | Relay-owned session persistence |
-| `HAHA_MODEL` | `deepseek-v4-flash` | Default worker model ID |
-| `HAHA_EFFORT` | `medium` | Default worker effort |
-| `HAHA_ALLOW_SHELL` | `true` | Allow Bash for builds and tests |
-| `HAHA_SHARE_DESKTOP_STATE` | `true` | Show production Relay sessions in Haha desktop under the task workdir |
-
-## Security model
-
-- The server binds to `127.0.0.1` by default.
-- Provider secrets are not returned by the API or dashboard.
-- `allowedFiles` is validated before dispatch and audited after execution.
-- Relay never commits, resets, restores, or applies a diff automatically.
-- `HAHA_ALLOW_SHELL=true` gives Flash unattended shell access in the selected workdir. Disable it when file editing alone is sufficient.
-- The planning Agent remains responsible for reviewing all changed files and running final verification.
-
-## Development
+## 源码开发
 
 ```powershell
-npm run dev
+npm install
+npm run build
 npm run typecheck
 npm run test:server
 npm run test:agents
-npm run test:mcp
-npm run test:mcp:packaged
-npm run test:codex-config
 npm run test:token-monitor
+npm run test:mcp
+npm run test:codex-config
 npm run test:ui
 npm run test:desktop
-npm run test:e2e
-npm run build
 ```
 
-`test:e2e` makes real Haha provider calls and therefore incurs model cost.
+真实 Haha 测试会产生模型费用：
 
-## Status
+```powershell
+$env:ALLOW_PAID_VISIBLE_E2E="1"
+npm run test:e2e:visible
+```
 
-Current deliberate limitations:
+## 安全边界
 
-- Planner model selection records Relay defaults; the active host application still owns the actual planner model switch.
-- Claude Code Haha production sessions are visible through its normal session index, while E2E tests use an isolated state directory.
-- Worktree isolation is not implemented yet; Sol must not edit the same files while Flash is running.
-- Token Monitor integration requires its Hub API. Local widget-only mode is not scraped.
-- The portable EXE supports the dashboard and background hosting, but Codex MCP requires the Setup installation because the portable launcher does not preserve stdio pipes.
+- 默认只监听 `127.0.0.1`。
+- Provider 凭据由各 Agent 自己管理，Relay 不通过 MCP 或 UI 返回凭据。
+- `allowedFiles` 在派发前校验，并在执行后用 Git 状态与内容哈希审计越界修改。
+- Relay 不自动 commit、reset、restore、checkout 或接受 diff。
+- 开启 `HAHA_ALLOW_SHELL=true` 会允许执行 Agent 在指定项目运行命令；最终审查仍由策划 Agent 负责。
+
+---
+
+<a id="english"></a>
+
+## English
+
+SolFlash Relay is a local multi-Agent coding control plane. Codex / Sol owns planning, architecture, UI decisions, and final review; Claude Code Haha / DeepSeek Flash, or another configured execution Agent, handles tightly bounded implementation work.
+
+Relay does not proxy model APIs or own provider credentials. Every Agent keeps its native login, provider settings, model selection, and conversation storage. Relay transports structured tasks, binds execution to the planner's exact project path, monitors progress, returns results, and audits usage.
+
+### Highlights
+
+- `agent_run` starts an execution task and waits for the final reply in one MCP call.
+- `agent_start`, `flash_wait`, and `flash_send` remain available for asynchronous work and targeted same-session repairs.
+- Tasks are grouped by absolute project path, with planner conversation A above executor conversation B.
+- Haha sessions remain visible in the native Haha desktop project and use the same working directory as Codex.
+- Windows notifications and a taskbar unread `1` badge report completion or failure while Relay is hosted in the tray.
+- Requested model, Haha CLI alias, and provider-reported effective model are recorded separately. Missing or empty replies fail explicitly.
+- Built-in profiles cover Codex, Claude Code Haha, Claude Code CLI, OpenCode, and Reasonix, plus credential-free custom CLI adapters.
+- Read-only Token Monitor integration adds cache savings, hit rate, cost, and provider balance/quota when available.
+
+### Install
+
+Download the recommended Setup build from [GitHub Releases](https://github.com/OPFIMISS/SolFlash-Relay-/releases):
+
+- `SolFlash-Relay-0.5.0-x64-setup.exe`: desktop host, tray mode, and one-click Codex MCP installation.
+- `SolFlash-Relay-0.5.0-x64-portable.exe`: portable dashboard and background host; MCP stdio installation requires the Setup build.
+
+Open Agent settings, select the planner/executor profiles and models, install Codex MCP, restart Codex, then paste the copied Relay instruction into the Codex project that should act as planner.
+
+### Flash verification
+
+The **Verify Flash for current project** action makes a small real provider call. It creates a visible Haha session named `Visible Flash self-check`, requires `deepseek-v4-flash`, checks the provider-reported effective model, requires a non-empty final reply, and writes an ignored proof file.
+
+If Haha contains many `Unknown skill: usage` sessions, those are created by Token Monitor `0.42.1` `/usage` probes rather than Relay. They inherit Haha's global default model and may therefore display Pro without a model response.
+
+### Development and security
+
+The packaged Windows application includes its runtime. Node.js 20+ is required only for source development. Relay binds to localhost by default, does not expose provider secrets, validates `allowedFiles`, audits changed files after execution, and leaves all final code review to the planning Agent.
+
+License: [MIT](LICENSE)

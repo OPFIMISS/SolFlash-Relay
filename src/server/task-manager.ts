@@ -6,6 +6,7 @@ import readline from "node:readline";
 import { promisify } from "node:util";
 
 import type {
+  AgentConversationKind,
   RelayEvent,
   RelayEventKind,
   RelayTask,
@@ -106,11 +107,14 @@ export class TaskManager {
       requestedModel,
       effectiveModel: null,
       modelWarning: null,
+      unread: false,
       usage: emptyUsage(),
       events: [],
+      messages: [],
     };
 
     await this.store.set(task);
+    await this.#message(task, "planner", "instruction", task.request.objective);
     await this.#event(task, "task.created", `Task created: ${task.request.title}`);
     void this.#run(task, this.#buildInitialPrompt(task), false);
     return task;
@@ -126,7 +130,10 @@ export class TaskManager {
     task.status = "queued";
     task.finishedAt = null;
     task.error = null;
+    task.unread = false;
+    task.summary = "";
     await this.store.set(task);
+    await this.#message(task, "planner", "follow-up", instruction.trim());
     void this.#run(task, this.#buildFollowUpPrompt(task, instruction), true);
     return task;
   }
@@ -190,6 +197,12 @@ export class TaskManager {
       resume
         ? `Resumed the existing ${agent.label} session in ${task.request.workdir}.`
         : `Started ${agent.label} in project ${task.projectName}.`,
+      { requestedModel: run.requestedModel, cliModel: run.cliModel },
+    );
+    await this.#event(
+      task,
+      "task.output",
+      `Model dispatch: requested ${run.requestedModel}; executor CLI received ${run.cliModel}.`,
     );
 
     const child = spawn(run.command, run.args, {
@@ -253,16 +266,23 @@ export class TaskManager {
 
         if (task.status === "cancelled") return;
         if (task.status === "failed") return;
-        if (code !== 0 || (!receivedResult && stderr.trim())) {
+        const missingHahaReply = run.outputFormat === "stream-json"
+          && (!receivedResult || !task.summary.trim());
+        const missingTextReply = run.outputFormat === "text" && !task.summary.trim();
+        if (code !== 0 || missingHahaReply || missingTextReply) {
           await this.#fail(
             task,
-            stderr.trim() || `Haha exited with code ${code ?? "unknown"}.`,
+            stderr.trim() || (!receivedResult
+              ? `${agent.label} exited without a final result. No model reply was received.`
+              : `${agent.label} returned an empty final result.`),
           );
           return;
         }
         task.status = "completed";
         task.finishedAt = new Date().toISOString();
+        task.unread = true;
         await this.store.set(task);
+        await this.#message(task, "executor", "result", task.summary);
         await this.#event(
           task,
           "task.completed",
@@ -331,7 +351,9 @@ export class TaskManager {
       if (payload.is_error) {
         task.status = "failed";
         task.finishedAt = new Date().toISOString();
+        task.unread = true;
         await this.store.set(task);
+        await this.#message(task, "executor", "error", resultMessage || "Task failed.");
         await this.#event(
           task,
           "task.failed",
@@ -373,11 +395,34 @@ export class TaskManager {
     await this.store.appendEvent(task.id, event);
   }
 
+  async #message(
+    task: RelayTask,
+    role: "planner" | "executor",
+    kind: AgentConversationKind,
+    content: string,
+  ) {
+    await this.store.appendMessage(task.id, {
+      id: randomUUID(),
+      role,
+      agent: role === "planner"
+        ? task.request.plannerAgent ?? "codex"
+        : task.request.executorAgent ?? "claude-haha",
+      model: role === "planner"
+        ? task.request.plannerModel ?? ""
+        : task.effectiveModel ?? task.requestedModel,
+      timestamp: new Date().toISOString(),
+      content,
+      kind,
+    });
+  }
+
   async #fail(task: RelayTask, message: string) {
     task.status = "failed";
     task.error = message;
     task.finishedAt = new Date().toISOString();
+    task.unread = true;
     await this.store.set(task);
+    await this.#message(task, "executor", "error", message);
     await this.#event(task, "task.failed", message);
   }
 

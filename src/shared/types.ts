@@ -17,6 +17,23 @@ export type RelayEventKind =
   | "task.model-warning"
   | "task.scope-warning";
 
+export type AgentConversationKind =
+  | "instruction"
+  | "follow-up"
+  | "output"
+  | "result"
+  | "error";
+
+export interface AgentConversationMessage {
+  id: string;
+  role: "planner" | "executor";
+  agent: string;
+  model: string;
+  timestamp: string;
+  content: string;
+  kind: AgentConversationKind;
+}
+
 export interface RelayTaskRequest {
   title: string;
   objective: string;
@@ -98,8 +115,10 @@ export interface RelayTask {
   requestedModel: string;
   effectiveModel: string | null;
   modelWarning: string | null;
+  unread: boolean;
   usage: RelayUsage;
   events: RelayEvent[];
+  messages: AgentConversationMessage[];
 }
 
 export interface RelayEvent {
@@ -112,6 +131,7 @@ export interface RelayEvent {
 }
 
 export interface RelayConfigView {
+  version: string;
   host: string;
   port: number;
   hahaRoot: string;

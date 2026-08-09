@@ -1,8 +1,11 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, shell, Tray } from "electron";
+import http from "node:http";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { RelayRuntime } from "../server/runtime.js";
+import { relayVersion } from "../server/config.js";
+import type { RelayTask } from "../shared/types.js";
 import { buildCodexMcpBlock, hasInstalledCodexMcp, mergeCodexMcpBlock } from "./codex-config.js";
 
 const relayUrl = `http://${process.env.RELAY_HOST ?? "127.0.0.1"}:${process.env.RELAY_PORT ?? "17322"}`;
@@ -20,6 +23,10 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let runtime: RelayRuntime | null = null;
 let quitting = false;
+const unreadTaskIds = new Set<string>();
+const notifiedTaskIds = new Set<string>();
+let eventRequest: ReturnType<typeof http.get> | null = null;
+let eventPollTimer: NodeJS.Timeout | null = null;
 
 console.error(`[desktop] bootstrap background=${backgroundMode} mcp=${mcpMode}`);
 const hasSingleInstanceLock = mcpMode || app.requestSingleInstanceLock();
@@ -56,6 +63,9 @@ async function bootstrap() {
   createTray();
   createApplicationMenu();
   registerIpc();
+  await syncUnreadTasks(false);
+  connectTaskEvents();
+  eventPollTimer = setInterval(() => void syncUnreadTasks(true), 1000);
   if (!backgroundMode) await showWindow();
 
   app.on("activate", () => void showWindow());
@@ -74,18 +84,37 @@ function configureEnvironment() {
 async function ensureRelay() {
   try {
     const response = await fetch(`${relayUrl}/api/health`);
-    if (response.ok) return;
+    if (response.ok) {
+      const health = await response.json() as { version?: string };
+      if (health.version === relayVersion) return;
+      throw new Error(
+        `端口 ${new URL(relayUrl).port} 正由旧版 Relay (${health.version ?? "0.3.x"}) 占用。` +
+        `请先从托盘退出旧版，再启动 SolFlash Relay ${relayVersion}。`,
+      );
+    }
   } catch {
-    // Start an embedded Relay runtime below.
+    try {
+      const response = await fetch(`${relayUrl}/api/health`);
+      if (response.ok) {
+        const health = await response.json() as { version?: string };
+        throw new Error(
+          `检测到旧版 Relay (${health.version ?? "0.3.x"}) 仍在后台运行。` +
+          `请退出旧版后再启动 ${relayVersion}，否则模型设置和任务记录会来自旧进程。`,
+        );
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("旧版 Relay")) throw error;
+    }
   }
   const module = await import("../server/runtime.js");
   runtime = await module.startRelayRuntime();
 }
 
-async function showWindow() {
+async function showWindow(taskId?: string) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.show();
     mainWindow.focus();
+    if (taskId) mainWindow.webContents.send("relay:focus-task", taskId);
     return;
   }
 
@@ -118,8 +147,11 @@ async function showWindow() {
     event.preventDefault();
     mainWindow?.hide();
   });
+  mainWindow.on("focus", () => void clearUnreadTasks());
   mainWindow.once("ready-to-show", () => mainWindow?.show());
   await mainWindow.loadURL(relayUrl);
+  updateOverlayIcon();
+  if (taskId) mainWindow.webContents.send("relay:focus-task", taskId);
 }
 
 function createTray() {
@@ -182,6 +214,7 @@ async function getDesktopStatus() {
     canInstallMcp: app.isPackaged && !portable,
     mcpInstalled: hasInstalledCodexMcp(current, process.execPath),
     configPath: codexConfigPath(),
+    unreadTasks: unreadTaskIds.size,
   };
 }
 
@@ -202,8 +235,9 @@ async function installMcpConfig() {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   const next = mergeCodexMcpBlock(current, block);
-  const temporary = `${configPath}.tmp`;
+  const temporary = `${configPath}.${process.pid}.tmp`;
   await writeFile(temporary, next, "utf8");
+  await rm(configPath, { force: true });
   await rename(temporary, configPath);
   return `MCP 已安装到 ${configPath}。重启 Codex 后生效。`;
 }
@@ -214,11 +248,99 @@ async function shutdownAndQuit() {
   tray?.destroy();
   tray = null;
   try {
+    eventRequest?.destroy();
+    eventRequest = null;
+    if (eventPollTimer) clearInterval(eventPollTimer);
+    eventPollTimer = null;
     await runtime?.close();
   } catch (error) {
     dialog.showErrorBox("Relay 退出错误", error instanceof Error ? error.message : String(error));
   }
   app.quit();
+}
+
+function connectTaskEvents() {
+  eventRequest?.destroy();
+  eventRequest = http.get(`${relayUrl}/api/events`, (response) => {
+    response.setEncoding("utf8");
+    let buffer = "";
+    response.on("data", (chunk: string) => {
+      buffer += chunk;
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary >= 0) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const data = frame.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
+        if (data && frame.includes("event: task")) {
+          try { handleTaskEvent(JSON.parse(data) as RelayTask); } catch { /* Ignore incomplete frames. */ }
+        }
+        boundary = buffer.indexOf("\n\n");
+      }
+    });
+    response.on("end", () => {
+      eventRequest = null;
+      if (!quitting) setTimeout(connectTaskEvents, 1500);
+    });
+  });
+  eventRequest.on("error", () => {
+    eventRequest = null;
+    if (!quitting) setTimeout(connectTaskEvents, 1500);
+  });
+}
+
+function handleTaskEvent(task: RelayTask) {
+  if (!task.unread || !["completed", "failed"].includes(task.status)) return;
+  unreadTaskIds.add(task.id);
+  updateOverlayIcon();
+  if (notifiedTaskIds.has(task.id)) return;
+  notifiedTaskIds.add(task.id);
+  if (!Notification.isSupported()) return;
+  const notification = new Notification({
+    title: task.status === "completed" ? "执行 Agent 已完成" : "执行 Agent 任务失败",
+    body: `${task.projectName} · ${task.request.title}\n${task.status === "completed" ? "Sol 可以开始审查结果。" : task.error ?? "请打开 Relay 查看详情。"}`,
+    icon: iconPath(),
+  });
+  notification.on("click", () => void showWindow(task.id));
+  notification.show();
+}
+
+async function syncUnreadTasks(notify: boolean) {
+  try {
+    const tasks = await fetch(`${relayUrl}/api/tasks`).then((response) => response.json()) as RelayTask[];
+    const currentUnread = new Set(
+      tasks.filter((task) => task.unread && ["completed", "failed"].includes(task.status)).map((task) => task.id),
+    );
+    for (const taskId of unreadTaskIds) {
+      if (!currentUnread.has(taskId)) unreadTaskIds.delete(taskId);
+    }
+    for (const task of tasks) {
+      if (!task.unread || !["completed", "failed"].includes(task.status)) continue;
+      if (notify) handleTaskEvent(task);
+      else unreadTaskIds.add(task.id);
+    }
+    updateOverlayIcon();
+  } catch {
+    // The event stream will retry after Relay is ready.
+  }
+}
+
+async function clearUnreadTasks() {
+  if (unreadTaskIds.size === 0) return;
+  const ids = [...unreadTaskIds];
+  unreadTaskIds.clear();
+  updateOverlayIcon();
+  await Promise.allSettled(ids.map((id) => fetch(`${relayUrl}/api/tasks/${id}/read`, { method: "POST" })));
+}
+
+function updateOverlayIcon() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (unreadTaskIds.size === 0) {
+    mainWindow.setOverlayIcon(null, "没有未读任务");
+    return;
+  }
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><circle cx="16" cy="16" r="15" fill="#d94343"/><text x="16" y="22" text-anchor="middle" font-family="Segoe UI" font-size="19" font-weight="700" fill="white">1</text></svg>`;
+  const badge = nativeImage.createFromDataURL(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`);
+  mainWindow.setOverlayIcon(badge, `${unreadTaskIds.size} 个未读任务`);
 }
 
 function iconPath() {
@@ -232,4 +354,4 @@ const desktopExecutable = () => process.env.PORTABLE_EXECUTABLE_FILE || process.
 const codexConfigPath = () => process.env.RELAY_CODEX_CONFIG
   || path.join(app.getPath("home"), ".codex", "config.toml");
 
-const usagePrompt = `使用 SolFlash Relay 完成这个任务。你负责架构、UI 决策和最终审查；在明确文件范围、约束和验收命令后，通过 agent_start 把机械实现交给执行 Agent。必须传入当前项目的绝对路径，等待执行完成后检查真实 diff 和测试，只在必要时用 flash_send 定点返工。`;
+const usagePrompt = `使用 SolFlash Relay 完成这个任务。你负责架构、UI 决策和最终审查；在明确文件范围、约束和验收命令后，优先通过 agent_run 把机械实现交给执行 Agent并等待最终回复。必须传入当前项目的绝对路径，完成后检查真实 diff 和测试，只在必要时用 flash_send 定点返工；需要异步运行时才使用 agent_start。`;

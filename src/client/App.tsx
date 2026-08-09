@@ -11,6 +11,7 @@ import {
   Cpu,
   Copy,
   FileCode2,
+  Folder,
   Gauge,
   GitCompareArrows,
   Moon,
@@ -18,6 +19,7 @@ import {
   Power,
   Radio,
   RefreshCw,
+  ScanSearch,
   Rocket,
   Send,
   Server,
@@ -54,8 +56,10 @@ import {
   getSettings,
   getTasks,
   getTokenMonitor,
+  markTaskRead,
   sendFollowUp,
   saveSettings,
+  startVisibleFlashCheck,
 } from "./api";
 
 const emptyMonitor: TokenMonitorSummary = {
@@ -178,9 +182,18 @@ export function App() {
 
   useEffect(() => {
     void window.relayDesktop?.getStatus().then(setDesktopStatus).catch(() => undefined);
+    return window.relayDesktop?.onFocusTask((taskId) => setSelectedId(taskId));
   }, []);
 
   const selected = tasks.find((task) => task.id === selectedId) ?? tasks[0] ?? null;
+  const projectGroups = useMemo(() => {
+    const groups = new Map<string, RelayTask[]>();
+    for (const task of tasks) {
+      const key = task.request.workdir.replaceAll("/", "\\").toLowerCase();
+      groups.set(key, [...(groups.get(key) ?? []), task]);
+    }
+    return [...groups.values()].sort((a, b) => b[0].updatedAt.localeCompare(a[0].updatedAt));
+  }, [tasks]);
   const activeCount = tasks.filter((task) => task.status === "running").length;
   const totalUsage = tasks.reduce(
     (sum, task) => ({
@@ -189,6 +202,13 @@ export function App() {
     }),
     { tokens: 0, cost: 0 },
   );
+
+  useEffect(() => {
+    if (window.relayDesktop || !selected?.unread || document.visibilityState !== "visible" || !document.hasFocus()) return;
+    void markTaskRead(selected.id).then((next) => {
+      setTasks((current) => current.map((task) => task.id === next.id ? next : task));
+    }).catch(() => undefined);
+  }, [selected?.id, selected?.unread]);
 
   const submitFollowUp = async () => {
     if (!selected || !followUp.trim()) return;
@@ -254,6 +274,21 @@ export function App() {
   const copyUsagePrompt = async () => {
     if (!window.relayDesktop) return;
     setDesktopMessage(await window.relayDesktop.copyUsagePrompt());
+  };
+
+  const runVisibleFlashCheck = async () => {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      const task = await startVisibleFlashCheck(selected.request.workdir);
+      setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
+      setSelectedId(task.id);
+      setDesktopMessage("已派发可见 Flash 自检。请在 Haha 的同项目会话中查看，Relay 会校验最终回复和实际模型。");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const planner = settings?.agents.find((agent) => agent.id === settings.plannerAgent);
@@ -355,12 +390,12 @@ export function App() {
                 <span>MCP 任务会自动出现在这里</span>
               </div>
             ) : (
-              tasks.map((task) => (
-                <TaskRow
-                  key={task.id}
-                  task={task}
-                  selected={task.id === selected?.id}
-                  onSelect={() => setSelectedId(task.id)}
+              projectGroups.map((group) => (
+                <ProjectGroup
+                  key={group[0].request.workdir}
+                  tasks={group}
+                  selectedId={selected?.id ?? null}
+                  onSelect={setSelectedId}
                 />
               ))
             )}
@@ -411,6 +446,11 @@ export function App() {
                   <span>{selected.modelWarning}</span>
                 </div>
               )}
+
+              <div className="conversation-stack" aria-label="双 Agent 项目对话">
+                <ConversationPane task={selected} role="planner" />
+                <ConversationPane task={selected} role="executor" />
+              </div>
 
               <div className="detail-columns">
                 <div className="activity-column">
@@ -489,6 +529,12 @@ export function App() {
             <ConnectionRow label="MCP Relay" value={config ? `${config.host}:${config.port}` : "离线"} online={Boolean(config)} />
             <ConnectionRow label="执行 Agent" value={executor?.label ?? "未配置"} online={Boolean(executor)} />
             <ConnectionRow label="Token Monitor" value={monitor.connected ? "已接入" : "未运行"} online={monitor.connected} />
+            <button className="secondary-button self-check-button" disabled={!selected || busy} onClick={() => void runVisibleFlashCheck()} title="会产生一次很小的真实 Flash API 调用">
+              <ScanSearch size={16} />验证当前项目的 Flash
+            </button>
+            {monitor.connected && config?.hahaShareDesktopState && (
+              <p className="integration-note">若 Haha 出现 “Unknown skill: usage”，那是 Token Monitor 的 /usage 探测会话，不是 Relay 任务。Relay 自检会以 “Visible Flash self-check” 命名。</p>
+            )}
           </section>
         </aside>
       </main>
@@ -625,13 +671,71 @@ function AgentNode({
   );
 }
 
+function ProjectGroup({
+  tasks,
+  selectedId,
+  onSelect,
+}: {
+  tasks: RelayTask[];
+  selectedId: string | null;
+  onSelect: (taskId: string) => void;
+}) {
+  const project = tasks[0];
+  const unread = tasks.filter((task) => task.unread).length;
+  return (
+    <section className="project-group">
+      <header className="project-group-header" title={project.request.workdir}>
+        <Folder size={15} />
+        <span><strong>{project.projectName}</strong><small>{project.request.workdir}</small></span>
+        {unread > 0 && <b>{unread}</b>}
+      </header>
+      {tasks.map((task) => (
+        <TaskRow
+          key={task.id}
+          task={task}
+          selected={task.id === selectedId}
+          onSelect={() => onSelect(task.id)}
+        />
+      ))}
+    </section>
+  );
+}
+
+function ConversationPane({ task, role }: { task: RelayTask; role: "planner" | "executor" }) {
+  const messages = (task.messages ?? []).filter((message) => message.role === role);
+  const isPlanner = role === "planner";
+  const agent = isPlanner ? task.request.plannerAgent : task.request.executorAgent;
+  const model = isPlanner
+    ? task.request.plannerModel
+    : task.effectiveModel ?? task.requestedModel;
+  return (
+    <section className={`conversation-pane conversation-${role}`}>
+      <header>
+        <span className="conversation-avatar">{isPlanner ? <Code2 size={16} /> : <Bot size={16} />}</span>
+        <div><strong>{isPlanner ? "A · 主策划" : "B · 执行"}</strong><small>{agent} · {model}</small></div>
+        {!isPlanner && <StatusPill status={task.status} />}
+      </header>
+      <div className="conversation-messages">
+        {messages.length > 0 ? messages.map((message) => (
+          <article className={`conversation-message message-${message.kind}`} key={message.id}>
+            <div><span>{message.kind === "follow-up" ? "返工指令" : message.kind === "error" ? "错误" : message.kind === "result" ? "最终回复" : message.kind === "output" ? "执行过程" : "任务指令"}</span><time>{formatTime(message.timestamp)}</time></div>
+            <p>{message.content}</p>
+          </article>
+        )) : (
+          <div className="conversation-empty">{isPlanner ? "等待策划指令" : "等待执行 Agent 回复"}</div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function TaskRow({ task, selected, onSelect }: { task: RelayTask; selected: boolean; onSelect: () => void }) {
   const Icon = statusIcons[task.status];
   return (
     <button className={`task-row ${selected ? "selected" : ""}`} onClick={onSelect}>
       <span className={`task-status-icon status-${task.status}`}><Icon size={16} /></span>
       <span className="task-copy">
-        <strong>{task.request.title}</strong>
+        <strong>{task.unread && <i className="unread-dot" />}{task.request.title}</strong>
         <small>{task.request.objective}</small>
       </span>
       <span className="task-meta">

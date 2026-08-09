@@ -1,5 +1,9 @@
 const { chromium } = require("playwright");
+const { spawn } = require("node:child_process");
 const path = require("node:path");
+
+const port = 17327;
+const relayUrl = `http://127.0.0.1:${port}`;
 
 const now = new Date().toISOString();
 const task = {
@@ -32,6 +36,7 @@ const task = {
   requestedModel: "deepseek-v4-flash",
   effectiveModel: "deepseek-v4-flash",
   modelWarning: null,
+  unread: true,
   usage: {
     inputTokens: 28400,
     outputTokens: 1850,
@@ -46,6 +51,10 @@ const task = {
     { id: "e3", taskId: "11111111-1111-4111-8111-111111111111", kind: "task.tool", timestamp: now, message: "Flash called Read" },
     { id: "e4", taskId: "11111111-1111-4111-8111-111111111111", kind: "task.tool", timestamp: now, message: "Flash called Edit" },
     { id: "e5", taskId: "11111111-1111-4111-8111-111111111111", kind: "task.output", timestamp: now, message: "Implemented loading and retry states. Verifying keyboard navigation before completion." }
+  ],
+  messages: [
+    { id: "m1", role: "planner", agent: "codex", model: "gpt-5.6-sol", timestamp: now, content: "Add model selector states without changing routes.", kind: "instruction" },
+    { id: "m2", role: "executor", agent: "claude-haha", model: "deepseek-v4-flash", timestamp: now, content: "Reading the existing selector and implementing the bounded states.", kind: "output" }
   ]
 };
 
@@ -63,13 +72,15 @@ const settings = {
 };
 
 const config = {
+  version: "0.5.0",
   host: "127.0.0.1",
   port: 17322,
   hahaRoot: "D:\\Claude Code Haha",
   hahaModel: "deepseek-v4-flash",
   hahaEffort: "medium",
   tokenMonitorUrl: "http://127.0.0.1:17321",
-  tokenMonitorProjectLabel: "SolFlashRelay"
+  tokenMonitorProjectLabel: "SolFlashRelay",
+  hahaShareDesktopState: true
 };
 
 const monitor = {
@@ -97,7 +108,7 @@ async function capture(browser, name, viewport) {
   await page.route("**/api/config", (route) => route.fulfill({ json: config }));
   await page.route("**/api/settings", (route) => route.fulfill({ json: settings }));
   await page.route("**/api/token-monitor**", (route) => route.fulfill({ json: monitor }));
-  await page.goto("http://127.0.0.1:17322", { waitUntil: "networkidle" });
+  await page.goto(relayUrl, { waitUntil: "networkidle" });
   await page.waitForSelector(".dashboard-grid");
   await page.screenshot({ path: path.join(".relay-data", `ui-${name}.png`), fullPage: true });
   let motion;
@@ -134,7 +145,7 @@ async function capture(browser, name, viewport) {
     const customModel = executorSettings.locator(".model-field input");
     await customModel.fill("luna-code-preview");
     if ((await customModel.inputValue()) !== "luna-code-preview") throw new Error("Custom intermediary model ID was not accepted");
-    await page.screenshot({ path: path.join(".relay-data", "ui-settings.png"), fullPage: true });
+    await page.screenshot({ path: path.join(".relay-data", "ui-settings.png") });
     await page.getByTitle("关闭").click();
   }
 
@@ -155,6 +166,21 @@ async function capture(browser, name, viewport) {
 }
 
 (async () => {
+  const daemon = spawn(process.execPath, [path.join("dist", "server", "daemon.js")], {
+    cwd: process.cwd(),
+    windowsHide: true,
+    stdio: "ignore",
+    env: { ...process.env, RELAY_PORT: String(port), RELAY_DATA_DIR: path.resolve(".relay-data", "ui-test") },
+  });
+  let ready = false;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      const response = await fetch(`${relayUrl}/api/health`);
+      if (response.ok) { ready = true; break; }
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (!ready) throw new Error(`UI test daemon did not start at ${relayUrl}`);
   const browser = await chromium.launch({ channel: "msedge", headless: true });
   try {
     const desktop = await capture(browser, "desktop", { width: 1440, height: 900 });
@@ -162,6 +188,7 @@ async function capture(browser, name, viewport) {
     console.log(JSON.stringify({ ok: true, desktop, mobile }));
   } finally {
     await browser.close();
+    daemon.kill();
   }
 })().catch((error) => {
   console.error(error);

@@ -5,6 +5,8 @@ import os from "node:os";
 
 import type { RelayConfigView } from "../shared/types.js";
 
+export const relayVersion = "0.5.0";
+
 const parsePort = (value: string | undefined, fallback: number) => {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 && parsed <= 65535
@@ -27,6 +29,7 @@ export interface RelayConfig extends RelayConfigView {
 }
 
 export const config: RelayConfig = {
+  version: relayVersion,
   host: process.env.RELAY_HOST ?? "127.0.0.1",
   port: parsePort(process.env.RELAY_PORT, 17322),
   dataDir: path.resolve(process.env.RELAY_DATA_DIR ?? ".relay-data"),
@@ -52,6 +55,7 @@ export const config: RelayConfig = {
 };
 
 export const publicConfig = (source: RelayConfig = config): RelayConfigView => ({
+  version: relayVersion,
   host: source.host,
   port: source.port,
   hahaRoot: source.hahaRoot,

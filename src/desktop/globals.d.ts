@@ -11,8 +11,10 @@ declare global {
         canInstallMcp: boolean;
         mcpInstalled: boolean;
         configPath: string;
+        unreadTasks: number;
       }>;
       copyUsagePrompt: () => Promise<string>;
+      onFocusTask: (listener: (taskId: string) => void) => () => void;
       quit: () => Promise<void>;
     };
   }
