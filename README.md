@@ -86,7 +86,7 @@ flowchart LR
 2. 在 Haha 中手动新建一次普通会话，确认目标模型可以正常回复。
 3. 下载的是 `SolFlash-Relay-0.5.0-x64-setup.exe`，不是 Portable 便携版。
 
-> **你截图中的错误代表正在使用 Portable。** Portable 可以运行面板和后台托管，但无法安装 Codex MCP。请先从托盘彻底退出 Portable，再安装并启动 Setup 版本。
+> **Codex MCP 安装仅支持 Setup 版本。** Portable 只提供面板与后台托管；切换到 Setup 前，请先从托盘退出 Portable。
 
 ### 1. 安装并启动 Setup 版本
 
