@@ -2,6 +2,7 @@ export type RelayTaskStatus =
   | "queued"
   | "running"
   | "waiting"
+  | "paused"
   | "completed"
   | "failed"
   | "cancelled";
@@ -14,6 +15,8 @@ export type RelayEventKind =
   | "task.completed"
   | "task.failed"
   | "task.cancelled"
+  | "task.paused"
+  | "task.resumed"
   | "task.planner-started"
   | "task.planner-completed"
   | "task.model-warning"
@@ -126,6 +129,10 @@ export interface RelayTask {
   sourceSessionTitle?: string;
   workflowMode?: "direct" | "planner-led" | "planner-adoption";
   workflowPhase?: "planner-review" | "executor-run" | "planner-verification" | "completed";
+  pausedPhase?: "planner-review" | "executor-run" | "planner-verification" | null;
+  activePrompt?: string | null;
+  activeResume?: boolean;
+  activePlannerGoal?: string | null;
   plannerThreadId?: string | null;
   plannerRounds?: number;
   plannerUsage?: RelayUsage;

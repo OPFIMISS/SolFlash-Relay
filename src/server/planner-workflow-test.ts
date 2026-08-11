@@ -147,4 +147,155 @@ if (!plannerLedTask.request.workdir.includes("planner-workflow-test") || planner
 }
 if (plannerLedTask.sessionId === session.sessionId) throw new Error("New planner-led task reused an adopted Haha session ID");
 
+let rejectVerification: ((error: Error) => void) | null = null;
+let verificationRuns = 0;
+let plannerInterruptions = 0;
+const pausablePlanner: PlannerRunner = {
+  async planTask() {
+    throw new Error("planTask should not run in the pause test");
+  },
+  async reviewAdoption() {
+    return {
+      threadId: "codex-pause-test",
+      summary: "Planner prepared a correction before the pause test.",
+      instruction: "Return FLASH_FIXED without changing files.",
+      usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: 0, model: "gpt-5.6-sol" },
+    };
+  },
+  async continueReview() {
+    throw new Error("continueReview should not run in the pause test");
+  },
+  async verifyImplementation() {
+    verificationRuns += 1;
+    if (verificationRuns === 1) {
+      await new Promise<never>((_resolve, reject) => {
+        rejectVerification = reject;
+      });
+    }
+    return {
+      threadId: "codex-pause-test",
+      verdict: "pass",
+      summary: "Resumed verification passed.",
+      instruction: "",
+      usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: 0, model: "gpt-5.6-sol" },
+    };
+  },
+  async pauseThread() {
+    plannerInterruptions += 1;
+    rejectVerification?.(new Error("Planner turn interrupted for pause test."));
+    rejectVerification = null;
+    return true;
+  },
+};
+
+const pauseManager = new TaskManager(testConfig, store, settings, pausablePlanner);
+const pauseStarted = await pauseManager.adopt(
+  { ...session, sessionId: "8bc32e5d-a3d2-45ad-a6c9-84ca64e4af56", title: "Pause workflow" },
+  ["README.md"],
+  "Exercise planner pause and resume.",
+);
+const verificationDeadline = Date.now() + 10_000;
+while (Date.now() < verificationDeadline) {
+  const current = pauseManager.get(pauseStarted.id);
+  if (current?.workflowPhase === "planner-verification" && current.status === "waiting") break;
+  await new Promise((resolve) => setTimeout(resolve, 50));
+}
+const paused = await pauseManager.pause(pauseStarted.id);
+if (paused.status !== "paused" || paused.pausedPhase !== "planner-verification") {
+  throw new Error(`Planner task did not preserve its paused phase: ${paused.status}/${paused.pausedPhase}`);
+}
+await new Promise((resolve) => setTimeout(resolve, 150));
+if (pauseManager.get(paused.id)?.status !== "paused") {
+  throw new Error("Interrupted planner callback advanced a paused task");
+}
+if (plannerInterruptions !== 1) throw new Error("The active planner turn was not interrupted");
+
+await pauseManager.resume(paused.id);
+const resumeDeadline = Date.now() + 10_000;
+let resumedTask = pauseManager.get(paused.id);
+while (Date.now() < resumeDeadline) {
+  resumedTask = pauseManager.get(paused.id);
+  if (resumedTask && ["completed", "failed", "cancelled"].includes(resumedTask.status)) break;
+  await new Promise((resolve) => setTimeout(resolve, 50));
+}
+if (resumedTask?.status !== "completed" || verificationRuns !== 2) {
+  throw new Error(`Paused planner task did not resume cleanly: ${resumedTask?.status}/${verificationRuns}`);
+}
+
+const slowAgent = {
+  ...localAgent,
+  id: "pause-executor",
+  label: "Pausable executor",
+  command: "powershell.exe",
+  args: ["-NoProfile", "-Command", "Start-Sleep -Seconds 2; Write-Output 'FLASH_RESUMED'"],
+};
+await settings.upsertAgent(slowAgent);
+const executorManager = new TaskManager(testConfig, store, settings, planner);
+const executorStarted = await executorManager.start({
+  title: "Pause active executor",
+  objective: "Pause and resume a running executor.",
+  workdir,
+  allowedFiles: ["README.md"],
+  plannerAgent: "codex",
+  plannerModel: "gpt-5.6-sol",
+  executorAgent: slowAgent.id,
+  model: slowAgent.defaultModel,
+  effort: "low",
+});
+const executorRunningDeadline = Date.now() + 5_000;
+while (Date.now() < executorRunningDeadline && executorManager.get(executorStarted.id)?.status !== "running") {
+  await new Promise((resolve) => setTimeout(resolve, 25));
+}
+const executorPaused = await executorManager.pause(executorStarted.id);
+if (executorPaused.status !== "paused" || executorPaused.pausedPhase !== "executor-run") {
+  throw new Error(`Executor did not pause in place: ${executorPaused.status}/${executorPaused.pausedPhase}`);
+}
+await new Promise((resolve) => setTimeout(resolve, 250));
+if (executorManager.get(executorPaused.id)?.status !== "paused") {
+  throw new Error("Terminated executor callback advanced a paused task");
+}
+await executorManager.resume(executorPaused.id);
+const executorResumeDeadline = Date.now() + 10_000;
+let executorResumed = executorManager.get(executorPaused.id);
+while (Date.now() < executorResumeDeadline) {
+  executorResumed = executorManager.get(executorPaused.id);
+  if (executorResumed && ["completed", "failed", "cancelled"].includes(executorResumed.status)) break;
+  await new Promise((resolve) => setTimeout(resolve, 50));
+}
+if (executorResumed?.status !== "completed" || !executorResumed.summary.includes("FLASH_RESUMED")) {
+  throw new Error(`Paused executor did not resume cleanly: ${executorResumed?.error ?? executorResumed?.status}`);
+}
+const executorSettledDeadline = Date.now() + 2_000;
+while (
+  Date.now() < executorSettledDeadline
+  && !executorManager.get(executorPaused.id)?.events.some((event) => event.kind === "task.completed")
+) {
+  await new Promise((resolve) => setTimeout(resolve, 25));
+}
+if (!executorManager.get(executorPaused.id)?.events.some((event) => event.kind === "task.completed")) {
+  throw new Error("Executor completion event did not finish persisting");
+}
+
+const exitStarted = await executorManager.start({
+  title: "Pause active work on exit",
+  objective: "The Relay shutdown path must leave active work paused.",
+  workdir,
+  allowedFiles: ["README.md"],
+  plannerAgent: "codex",
+  plannerModel: "gpt-5.6-sol",
+  executorAgent: slowAgent.id,
+  model: slowAgent.defaultModel,
+  effort: "low",
+});
+const exitRunningDeadline = Date.now() + 5_000;
+while (Date.now() < exitRunningDeadline && executorManager.get(exitStarted.id)?.status !== "running") {
+  await new Promise((resolve) => setTimeout(resolve, 25));
+}
+await executorManager.shutdown();
+const stoppedOnExit = executorManager.get(exitStarted.id);
+if (stoppedOnExit?.status !== "paused" || stoppedOnExit.pausedPhase !== "executor-run") {
+  throw new Error(`Relay shutdown did not pause active work: ${stoppedOnExit?.status}/${stoppedOnExit?.pausedPhase}`);
+}
+
+await store.flush();
 await rm(root, { recursive: true, force: true });

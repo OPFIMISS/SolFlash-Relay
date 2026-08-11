@@ -71,6 +71,7 @@ const asNumber = (value: unknown) =>
 
 export class TaskManager {
   readonly #processes = new Map<string, ReturnType<typeof spawn>>();
+  readonly #settling = new Map<string, Promise<void>>();
 
   constructor(
     private readonly relayConfig: RelayConfig,
@@ -121,12 +122,18 @@ export class TaskManager {
       plannerThreadId: null,
       plannerRounds: 0,
       plannerUsage: emptyUsage(),
+      pausedPhase: null,
+      activePrompt: null,
+      activeResume: false,
+      activePlannerGoal: null,
     };
 
     await this.store.set(task);
     await this.#message(task, "planner", "instruction", task.request.objective);
     await this.#event(task, "task.created", `Task created: ${task.request.title}`);
-    void this.#run(task, this.#buildInitialPrompt(task), false);
+    task.activePrompt = this.#buildInitialPrompt(task);
+    await this.store.set(task);
+    void this.#run(task, task.activePrompt, false);
     return task;
   }
 
@@ -180,6 +187,10 @@ export class TaskManager {
       plannerThreadId: null,
       plannerRounds: 0,
       plannerUsage: emptyUsage(),
+      pausedPhase: null,
+      activePrompt: null,
+      activeResume: false,
+      activePlannerGoal: null,
     };
     await this.store.set(task);
     await this.#message(task, "planner", "instruction", normalized.objective);
@@ -190,6 +201,8 @@ export class TaskManager {
 
   async #runPlannerTask(task: RelayTask, goal: string) {
     try {
+      if (isPaused(task)) return;
+      task.activePlannerGoal = goal;
       task.status = "waiting";
       task.workflowPhase = "planner-review";
       await this.store.set(task);
@@ -199,6 +212,7 @@ export class TaskManager {
         await this.store.set(task);
         await this.#event(task, "task.planner-started", `Created visible planner thread ${threadId}.`);
       }, (summary) => this.#plannerProgress(task, summary));
+      if (isPaused(task)) return;
       task.plannerThreadId = review.threadId;
       task.plannerRounds = 1;
       task.plannerUsage = mergeUsage(task.plannerUsage ?? emptyUsage(), review.usage);
@@ -207,6 +221,7 @@ export class TaskManager {
       await this.#event(task, "task.planner-completed", `Planner completed framework and execution guidance in thread ${review.threadId}.`);
       await this.#queueExecutor(task, review.instruction, false);
     } catch (error) {
+      if (isPaused(task)) return;
       await this.#fail(task, error instanceof Error ? error.message : String(error), "planner");
     }
   }
@@ -231,6 +246,8 @@ export class TaskManager {
 
   async #runPlannerGoal(task: RelayTask, goal: string) {
     try {
+      if (isPaused(task)) return;
+      task.activePlannerGoal = goal;
       task.status = "waiting";
       task.workflowPhase = "planner-review";
       task.finishedAt = null;
@@ -240,6 +257,7 @@ export class TaskManager {
       await this.#message(task, "planner", "instruction", goal);
       await this.#event(task, "task.planner-started", `User guidance was sent to Codex thread ${task.plannerThreadId}.`);
       const review = await this.planner.continueReview(task, goal, (summary) => this.#plannerProgress(task, summary));
+      if (isPaused(task)) return;
       task.plannerRounds = (task.plannerRounds ?? 0) + 1;
       task.plannerUsage = mergeUsage(task.plannerUsage ?? emptyUsage(), review.usage);
       await this.store.set(task);
@@ -247,6 +265,7 @@ export class TaskManager {
       await this.#event(task, "task.planner-completed", `Sol produced a new correction in Codex thread ${task.plannerThreadId}.`);
       await this.#queueExecutor(task, review.instruction, true);
     } catch (error) {
+      if (task.status === "paused") return;
       await this.#fail(task, error instanceof Error ? error.message : String(error), "planner");
     }
   }
@@ -263,9 +282,11 @@ export class TaskManager {
     task.error = null;
     task.unread = false;
     task.summary = "";
+    task.activePrompt = this.#buildFollowUpPrompt(task, instruction);
+    task.activeResume = resume;
     await this.store.set(task);
     await this.#message(task, "planner", "follow-up", instruction.trim());
-    void this.#run(task, this.#buildFollowUpPrompt(task, instruction), resume);
+    void this.#run(task, task.activePrompt, resume);
     return task;
   }
 
@@ -323,6 +344,10 @@ export class TaskManager {
       plannerThreadId: null,
       plannerRounds: 0,
       plannerUsage: emptyUsage(),
+      pausedPhase: null,
+      activePrompt: null,
+      activeResume: true,
+      activePlannerGoal: null,
     };
 
     await this.store.set(task);
@@ -338,6 +363,8 @@ export class TaskManager {
 
   async #runPlannerAdoption(task: RelayTask, session: HahaSessionSummary, goal: string) {
     try {
+      if (task.status === "paused") return;
+      task.activePlannerGoal = goal;
       task.status = "waiting";
       task.workflowPhase = "planner-review";
       await this.store.set(task);
@@ -347,6 +374,7 @@ export class TaskManager {
         await this.store.set(task);
         await this.#event(task, "task.planner-started", `Created visible Codex planner thread ${threadId}.`);
       }, (summary) => this.#plannerProgress(task, summary));
+      if (isPaused(task)) return;
       task.plannerThreadId = review.threadId;
       task.plannerRounds = 1;
       task.plannerUsage = mergeUsage(task.plannerUsage ?? emptyUsage(), review.usage);
@@ -355,8 +383,68 @@ export class TaskManager {
       await this.#event(task, "task.planner-completed", `Sol review completed in Codex thread ${review.threadId}.`);
       await this.#queueExecutor(task, review.instruction, true);
     } catch (error) {
+      if (task.status === "paused") return;
       await this.#fail(task, error instanceof Error ? error.message : String(error), "planner");
     }
+  }
+
+  async pause(taskId: string) {
+    const task = this.#requireTask(taskId);
+    if (["completed", "failed", "cancelled", "paused"].includes(task.status)) return task;
+    task.pausedPhase = task.workflowPhase === "completed" ? null : task.workflowPhase;
+    task.status = "paused";
+    task.finishedAt = null;
+    await this.store.set(task);
+    await this.#event(task, "task.paused", `Paused during ${task.pausedPhase ?? "the current stage"}.`);
+
+    const child = this.#processes.get(taskId);
+    if (child && !child.killed) {
+      const closed = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("Timed out while stopping the execution Agent.")), 5_000);
+        child.once("close", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+      await terminateProcess(child);
+      await closed;
+      const settling = this.#settling.get(taskId);
+      if (settling) await settling;
+    }
+    if (task.plannerThreadId) {
+      try {
+        await this.planner.pauseThread?.(task.plannerThreadId);
+      } catch (error) {
+        await this.#event(task, "task.output", `Planner interruption warning: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return task;
+  }
+
+  async resume(taskId: string) {
+    const task = this.#requireTask(taskId);
+    if (task.status !== "paused") throw new Error("Only a paused task can be resumed.");
+    const phase = task.pausedPhase ?? task.workflowPhase;
+    task.status = phase === "executor-run" ? "queued" : "waiting";
+    task.error = null;
+    task.unread = false;
+    task.finishedAt = null;
+    await this.store.set(task);
+    await this.#event(task, "task.resumed", `Resuming ${phase}.`);
+
+    if (phase === "executor-run") {
+      if (!task.activePrompt) throw new Error("Paused executor prompt is unavailable.");
+      void this.#run(task, task.activePrompt, task.activeResume ?? true);
+    } else if (phase === "planner-verification") {
+      void this.#runPlannerVerification(task);
+    } else if (task.plannerThreadId) {
+      void this.#runPlannerGoal(task, task.activePlannerGoal ?? task.request.objective);
+    } else if (task.workflowMode === "planner-adoption") {
+      void this.#runPlannerAdoption(task, this.#sessionFromTask(task), task.activePlannerGoal ?? task.request.objective);
+    } else {
+      void this.#runPlannerTask(task, task.activePlannerGoal ?? task.request.objective);
+    }
+    return task;
   }
 
   async cancel(taskId: string) {
@@ -364,6 +452,7 @@ export class TaskManager {
     const child = this.#processes.get(taskId);
     if (child && !child.killed) await terminateProcess(child);
     task.status = "cancelled";
+    task.pausedPhase = null;
     task.finishedAt = new Date().toISOString();
     await this.store.set(task);
     await this.#event(task, "task.cancelled", "Task cancelled by Sol or the user.");
@@ -389,24 +478,26 @@ export class TaskManager {
   }
 
   async shutdown() {
-    const active = [...this.#processes.entries()];
-    for (const [taskId, child] of active) {
-      if (!child.killed) await terminateProcess(child);
-      const task = this.store.get(taskId);
-      if (!task || task.status !== "running") continue;
-      task.status = "cancelled";
-      task.finishedAt = new Date().toISOString();
-      await this.store.set(task);
-      await this.#event(task, "task.cancelled", "Execution Agent stopped because Relay exited.");
+    const active = this.store.list().filter((task) =>
+      task.status === "queued" || task.status === "running" || task.status === "waiting"
+    );
+    for (const task of active) {
+      await this.pause(task.id);
+      await this.#event(task, "task.output", "Relay exited. The task remains paused until you resume it manually.");
     }
     this.planner.close?.();
   }
 
   async #run(task: RelayTask, prompt: string, resume: boolean) {
+    if (task.status === "paused") return;
     const agent = this.#requireExecutor(task.request.executorAgent ?? "claude-haha");
     let run;
     try {
       run = await buildAgentRun(this.relayConfig, agent, task, prompt, resume);
+      if (isPaused(task)) {
+        await this.store.set(task);
+        return;
+      }
     } catch (error) {
       await this.#fail(
         task,
@@ -471,7 +562,7 @@ export class TaskManager {
     });
 
     child.on("close", (code) => {
-      void (async () => {
+      const settling = (async () => {
         this.#processes.delete(task.id);
         await processing;
         const after = await captureGitSnapshot(
@@ -496,6 +587,7 @@ export class TaskManager {
 
         await this.#checkEffectiveModel(task);
 
+        if (isPaused(task)) return;
         if (task.status === "cancelled") return;
         if (task.status === "failed") return;
         const missingHahaReply = run.outputFormat === "stream-json"
@@ -518,7 +610,16 @@ export class TaskManager {
           return;
         }
         await this.#complete(task, task.summary || `${agent.label} process completed.`);
-      })();
+      })().catch(async (error) => {
+        if (!isPaused(task)) {
+          await this.#fail(task, error instanceof Error ? error.message : String(error));
+        }
+      });
+      this.#settling.set(task.id, settling);
+      void settling.then(
+        () => this.#settling.get(task.id) === settling && this.#settling.delete(task.id),
+        () => this.#settling.get(task.id) === settling && this.#settling.delete(task.id),
+      );
     });
 
     if (run.prompt !== null) child.stdin.write(run.prompt);
@@ -527,6 +628,7 @@ export class TaskManager {
 
   async #runPlannerVerification(task: RelayTask) {
     try {
+      if (task.status === "paused") return;
       task.status = "waiting";
       task.workflowPhase = "planner-verification";
       await this.store.set(task);
@@ -535,6 +637,7 @@ export class TaskManager {
         task,
         (summary) => this.#plannerProgress(task, summary),
       );
+      if (isPaused(task)) return;
       task.plannerRounds = (task.plannerRounds ?? 0) + 1;
       task.plannerUsage = mergeUsage(task.plannerUsage ?? emptyUsage(), review.usage);
       await this.store.set(task);
@@ -551,6 +654,7 @@ export class TaskManager {
       }
       await this.#complete(task, `Sol final review passed: ${review.summary}`);
     } catch (error) {
+      if (task.status === "paused") return;
       await this.#fail(task, error instanceof Error ? error.message : String(error), "planner");
     }
   }
@@ -560,6 +664,9 @@ export class TaskManager {
     task.workflowPhase = "completed";
     task.finishedAt = new Date().toISOString();
     task.unread = true;
+    task.pausedPhase = null;
+    task.activePrompt = null;
+    task.activePlannerGoal = null;
     await this.store.set(task);
     await this.#event(task, "task.completed", message);
     this.#releasePlanner(task);
@@ -696,6 +803,7 @@ export class TaskManager {
   }
 
   async #fail(task: RelayTask, message: string, role: "planner" | "executor" = "executor") {
+    if (task.status === "paused") return;
     task.status = "failed";
     task.error = message;
     task.finishedAt = new Date().toISOString();
@@ -708,6 +816,19 @@ export class TaskManager {
 
   #releasePlanner(task: RelayTask) {
     if (task.plannerThreadId) this.planner.releaseThread?.(task.plannerThreadId);
+  }
+
+  #sessionFromTask(task: RelayTask): HahaSessionSummary {
+    return {
+      sessionId: task.sessionId,
+      title: task.sourceSessionTitle ?? task.request.title,
+      workdir: task.request.workdir,
+      model: task.effectiveModel ?? task.requestedModel,
+      updatedAt: task.updatedAt,
+      lastPrompt: task.request.objective,
+      lastResponse: task.summary,
+      changedFiles: task.changedFiles,
+    };
   }
 
   #requireTask(taskId: string) {
@@ -902,6 +1023,8 @@ const isAllowedPath = (file: string, allowed: Set<string>) => {
   }
   return false;
 };
+
+const isPaused = (task: RelayTask) => task.status === "paused";
 
 const terminateProcess = async (child: ReturnType<typeof spawn>) => {
   if (!child.pid || child.killed) return;

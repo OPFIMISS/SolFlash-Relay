@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,6 +14,8 @@ import { isTerminal } from "./task-store.js";
 const host = process.env.RELAY_HOST ?? "127.0.0.1";
 const port = Number(process.env.RELAY_PORT ?? 17322);
 const relayUrl = process.env.RELAY_URL ?? `http://${host}:${port}`;
+const userExitLock = process.env.RELAY_USER_EXIT_LOCK
+  ?? path.join(process.env.APPDATA ?? process.cwd(), "SolFlash Relay", "user-exit.lock");
 
 const textResult = (value: unknown, isError = false) => ({
   isError,
@@ -34,6 +37,8 @@ const conciseTask = (task: RelayTask | null) => {
     effectiveModel: task.effectiveModel,
     modelWarning: task.modelWarning,
     status: task.status,
+    workflowPhase: task.workflowPhase,
+    pausedPhase: task.pausedPhase,
     updatedAt: task.updatedAt,
     summary: task.summary,
     error: task.error,
@@ -69,6 +74,9 @@ const waitForDaemon = async () => {
   }
 
   if (shouldStart) {
+    if (existsSync(userExitLock)) {
+      throw new Error("SolFlash Relay was explicitly exited by the user. Open SolFlash Relay manually to re-enable MCP delegation.");
+    }
     const desktopExecutable = process.env.RELAY_DESKTOP_EXECUTABLE;
     const currentDir = path.dirname(fileURLToPath(import.meta.url));
     const daemonPath = path.join(currentDir, "daemon.js");
@@ -175,12 +183,18 @@ server.registerTool(
         body: JSON.stringify(request),
       });
       const deadline = Date.now() + timeoutSeconds * 1000;
-      while (!isTerminal(task.status) && Date.now() < deadline) {
+      while (!isTerminal(task.status) && task.status !== "paused" && Date.now() < deadline) {
         const query = new URLSearchParams({
           afterUpdatedAt: task.updatedAt,
           timeoutSeconds: String(Math.min(60, Math.max(1, Math.ceil((deadline - Date.now()) / 1000)))),
         });
         task = await requestJson<RelayTask>(`/api/tasks/${task.id}/wait?${query}`);
+      }
+      if (task.status === "paused") {
+        return textResult({
+          ...conciseTask(task),
+          next: "The task is paused. Resume it in SolFlash Relay before waiting again.",
+        });
       }
       if (!isTerminal(task.status)) {
         return textResult({
@@ -255,12 +269,18 @@ server.registerTool(
         body: JSON.stringify(request),
       });
       const deadline = Date.now() + timeoutSeconds * 1000;
-      while (!isTerminal(task.status) && Date.now() < deadline) {
+      while (!isTerminal(task.status) && task.status !== "paused" && Date.now() < deadline) {
         const query = new URLSearchParams({
           afterUpdatedAt: task.updatedAt,
           timeoutSeconds: String(Math.min(60, Math.max(1, Math.ceil((deadline - Date.now()) / 1000)))),
         });
         task = await requestJson<RelayTask>(`/api/tasks/${task.id}/wait?${query}`);
+      }
+      if (task.status === "paused") {
+        return textResult({
+          ...conciseTask(task),
+          next: "The adopted task is paused. Resume it in SolFlash Relay before waiting again.",
+        });
       }
       if (!isTerminal(task.status)) {
         return textResult({

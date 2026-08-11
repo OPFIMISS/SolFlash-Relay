@@ -77,6 +77,7 @@ function stopPackagedInstancesForUpdate() {
 async function bootstrap() {
   await app.whenReady();
   console.error("[desktop] app ready");
+  if (!backgroundMode && !mcpMode) await rm(userExitLockPath(), { force: true });
   configureEnvironment();
 
   if (mcpMode) {
@@ -105,7 +106,10 @@ function configureEnvironment() {
   process.env.RELAY_DATA_DIR ||= path.join(app.getPath("userData"), "relay-data");
   process.env.RELAY_DESKTOP_EXECUTABLE = executable;
   process.env.RELAY_DESKTOP_CWD = path.dirname(executable);
+  process.env.RELAY_USER_EXIT_LOCK = userExitLockPath();
 }
+
+const userExitLockPath = () => path.join(app.getPath("userData"), "user-exit.lock");
 
 async function ensureRelay() {
   try {
@@ -297,6 +301,8 @@ async function installMcpConfig() {
 async function shutdownAndQuit() {
   if (quitting) return;
   quitting = true;
+  await mkdir(path.dirname(userExitLockPath()), { recursive: true });
+  await writeFile(userExitLockPath(), new Date().toISOString(), "utf8");
   const window = mainWindow;
   mainWindow = null;
   if (window && !window.isDestroyed()) window.destroy();

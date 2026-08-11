@@ -225,6 +225,7 @@ const buildHahaDesktopRun = async (
     const created = await response.json() as { sessionId?: string };
     if (!created.sessionId) throw new Error("Haha desktop created a session without a sessionId.");
     task.sessionId = created.sessionId;
+    task.activeResume = true;
     await fetch(`${relayConfig.hahaServerUrl}/api/sessions/${encodeURIComponent(task.sessionId)}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },

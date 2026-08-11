@@ -63,6 +63,7 @@ export class CodexAppServer {
   }>();
   #nextId = 1;
   #stderr = "";
+  readonly #activeTurns = new Map<string, string>();
 
   constructor() {
     this.#child = spawn(resolveCodexPath(), [
@@ -88,7 +89,7 @@ export class CodexAppServer {
 
   async initialize() {
     await this.request("initialize", {
-      clientInfo: { name: "sol-flash-relay", title: "SolFlash Relay", version: "0.6.4" },
+      clientInfo: { name: "sol-flash-relay", title: "SolFlash Relay", version: "0.6.6" },
       capabilities: { experimentalApi: true, requestAttestation: false },
     });
     this.notify("initialized");
@@ -150,7 +151,10 @@ export class CodexAppServer {
       outputSchema: options.outputSchema,
     });
     const turnId = response.turn.id;
-    const completed = await this.waitFor((message) => {
+    this.#activeTurns.set(options.threadId, turnId);
+    let completed: JsonRpcMessage;
+    try {
+      completed = await this.waitFor((message) => {
       if (message.method === "item/completed") {
         const params = message.params as unknown as ItemCompletedParams;
         if (params.threadId === options.threadId && params.turnId === turnId && params.item.type === "agentMessage") {
@@ -181,7 +185,10 @@ export class CodexAppServer {
       if (message.method !== "turn/completed") return false;
       const params = message.params as unknown as TurnCompletedParams;
       return params.threadId === options.threadId && params.turn.id === turnId;
-    }, 30 * 60_000);
+      }, 30 * 60_000);
+    } finally {
+      this.#activeTurns.delete(options.threadId);
+    }
     const params = completed.params as unknown as TurnCompletedParams;
     if (params.turn.status !== "completed") {
       throw new Error(params.turn.error?.message ?? `Codex turn ended with ${params.turn.status}.`);
@@ -189,6 +196,13 @@ export class CodexAppServer {
     await progressQueue;
     if (!finalResponse.trim()) throw new Error("Codex app-server completed without a final response.");
     return { threadId: options.threadId, finalResponse, usage };
+  }
+
+  async interruptThread(threadId: string) {
+    const turnId = this.#activeTurns.get(threadId);
+    if (!turnId) return false;
+    await this.request("turn/interrupt", { threadId, turnId });
+    return true;
   }
 
   request<T = unknown>(method: string, params: Record<string, unknown>): Promise<T> {

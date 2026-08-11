@@ -18,6 +18,8 @@ import {
   Moon,
   MessagesSquare,
   Percent,
+  Pause,
+  Play,
   Plus,
   Power,
   Radio,
@@ -65,6 +67,8 @@ import {
   getTokenMonitor,
   importHahaSession,
   markTaskRead,
+  pauseTask,
+  resumeTask,
   sendFollowUp,
   sendPlannerFollowUp,
   saveSettings,
@@ -111,6 +115,7 @@ const statusLabels: Record<RelayTaskStatus, string> = {
   queued: "排队中",
   running: "执行中",
   waiting: "等待中",
+  paused: "已暂停",
   completed: "已完成",
   failed: "失败",
   cancelled: "已取消",
@@ -120,12 +125,14 @@ const statusIcons: Record<RelayTaskStatus, typeof Clock3> = {
   queued: Clock3,
   running: Radio,
   waiting: Clock3,
+  paused: Pause,
   completed: Check,
   failed: X,
   cancelled: CircleStop,
 };
 
 const workflowLabel = (task: RelayTask) => {
+  if (task.status === "paused") return "已暂停";
   if (!task.workflowMode || task.workflowMode === "direct") return statusLabels[task.status];
   if (task.workflowPhase === "planner-review") return "Sol 审查中";
   if (task.workflowPhase === "executor-run") return task.status === "queued" ? "等待 Flash" : "Flash 执行中";
@@ -280,6 +287,32 @@ export function App() {
     setBusy(true);
     try {
       const next = await cancelTask(selected.id);
+      setTasks((current) => [next, ...current.filter((task) => task.id !== next.id)]);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const pauseSelected = async () => {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      const next = await pauseTask(selected.id);
+      setTasks((current) => [next, ...current.filter((task) => task.id !== next.id)]);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resumeSelected = async () => {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      const next = await resumeTask(selected.id);
       setTasks((current) => [next, ...current.filter((task) => task.id !== next.id)]);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -605,14 +638,34 @@ export function App() {
                   </div>
                 </div>
                 <div className="detail-actions">
-                  {selected.status === "running" && (
+                  {["queued", "running", "waiting"].includes(selected.status) && (
+                    <button
+                      className="secondary-button"
+                      disabled={busy}
+                      onClick={() => void pauseSelected()}
+                    >
+                      <Pause size={17} />
+                      暂停
+                    </button>
+                  )}
+                  {selected.status === "paused" && (
+                    <button
+                      className="primary-button"
+                      disabled={busy}
+                      onClick={() => void resumeSelected()}
+                    >
+                      <Play size={17} />
+                      继续
+                    </button>
+                  )}
+                  {["queued", "running", "waiting", "paused"].includes(selected.status) && (
                     <button
                       className="secondary-button danger-button"
                       disabled={busy}
                       onClick={() => void stopSelected()}
                     >
                       <CircleStop size={17} />
-                      停止
+                      取消
                     </button>
                   )}
                 </div>
@@ -675,7 +728,7 @@ export function App() {
                   />
                   <button
                     className="primary-button"
-                    disabled={busy || !followUp.trim() || selected.status === "running" || selected.status === "queued" || selected.status === "waiting"}
+                    disabled={busy || !followUp.trim() || selected.status === "running" || selected.status === "queued" || selected.status === "waiting" || selected.status === "paused"}
                     onClick={() => void submitFollowUp()}
                     title={selected.workflowMode === "planner-adoption" ? "继续同一个 Codex 决策对话" : "恢复同一执行 Agent 会话"}
                   >
@@ -1114,7 +1167,9 @@ function ConversationPane({ task, role }: { task: RelayTask; role: "planner" | "
   const detail = isPlanner
     ? `${agent} · ${model}${task.plannerThreadId ? ` · 已创建 Codex 对话 · ${task.plannerThreadId}` : " · 等待创建真实对话"}`
     : `${agent} · ${model} · ${task.sessionId.slice(0, 8)}`;
-  const phaseLabel = isPlanner
+  const phaseLabel = task.status === "paused"
+    ? "已暂停"
+    : isPlanner
     ? task.workflowPhase === "planner-review"
       ? "审查中"
       : task.workflowPhase === "planner-verification"

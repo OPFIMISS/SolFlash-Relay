@@ -39,6 +39,10 @@ export class TaskStore extends EventEmitter {
         task.workflowPhase ??= task.status === "completed" ? "completed" : "executor-run";
         task.plannerThreadId ??= null;
         task.plannerRounds ??= 0;
+        task.pausedPhase ??= null;
+        task.activePrompt ??= null;
+        task.activeResume ??= false;
+        task.activePlannerGoal ??= null;
         task.plannerUsage ??= {
           inputTokens: 0,
           outputTokens: 0,
@@ -108,7 +112,7 @@ export class TaskStore extends EventEmitter {
   waitForUpdate(taskId: string, afterUpdatedAt: string, timeoutMs: number) {
     const current = this.get(taskId);
     if (!current) return Promise.resolve(null);
-    if (current.updatedAt !== afterUpdatedAt || isTerminal(current.status)) {
+    if (current.updatedAt !== afterUpdatedAt || isTerminal(current.status) || current.status === "paused") {
       return Promise.resolve(current);
     }
 
@@ -128,6 +132,10 @@ export class TaskStore extends EventEmitter {
       };
       this.on("task", onTask);
     });
+  }
+
+  async flush() {
+    await this.#persistQueue;
   }
 
   async #persist() {

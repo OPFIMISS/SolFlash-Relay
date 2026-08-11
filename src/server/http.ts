@@ -150,6 +150,24 @@ export const startHttpServer = (
       });
     }
   });
+  app.post("/api/tasks/:id/pause", async (request, response) => {
+    try {
+      response.json(await manager.pause(request.params.id));
+    } catch (error) {
+      response.status(400).json({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+  app.post("/api/tasks/:id/resume", async (request, response) => {
+    try {
+      response.status(202).json(await manager.resume(request.params.id));
+    } catch (error) {
+      response.status(400).json({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
   app.delete("/api/tasks/:id", async (request, response) => {
     try {
       const id = await manager.delete(request.params.id);

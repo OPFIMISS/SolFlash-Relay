@@ -28,6 +28,7 @@ export interface PlannerRunner {
   continueReview(task: RelayTask, goal: string, onProgress?: PlannerProgress): Promise<PlannerReview>;
   verifyImplementation(task: RelayTask, onProgress?: PlannerProgress): Promise<PlannerReview>;
   releaseThread?(threadId: string): void;
+  pauseThread?(threadId: string): Promise<boolean>;
   close?(): void;
 }
 
@@ -207,6 +208,10 @@ export class CodexPlanner implements PlannerRunner {
     if (!server) return;
     this.#servers.delete(threadId);
     server.close();
+  }
+
+  async pauseThread(threadId: string) {
+    return await this.#servers.get(threadId)?.interruptThread(threadId) ?? false;
   }
 
   close() {
